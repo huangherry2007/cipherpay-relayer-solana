@@ -17,6 +17,7 @@ build/
 *.swp
 *.swo
 .DS_Store
+.cursor
 
 # Logs
 logs/
