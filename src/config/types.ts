@@ -35,6 +35,11 @@ export interface PrivacyConfig {
   maxDelay: number;
   minDelay: number;
   mixingEnabled: boolean;
+  maxPoolSize: number;
+  mixingInterval: number;
+  maxBatchSize: number;
+  addDummyTransactions: boolean;
+  maxDummyTransactions: number;
 }
 
 export interface NetworkConfig {
@@ -45,6 +50,8 @@ export interface NetworkConfig {
     windowMs: number;
     max: number;
   };
+  maxRetries: number;
+  retryDelay: number;
 }
 
 export type TransactionStatus = 'pending' | 'submitted' | 'confirmed' | 'failed';

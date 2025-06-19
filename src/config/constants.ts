@@ -18,7 +18,12 @@ export const DEFAULT_CONFIG = {
 export const PRIVACY_CONFIG = {
   maxDelay: 30000,  // 30 seconds
   minDelay: 5000,   // 5 seconds
-  mixingEnabled: true
+  mixingEnabled: true,
+  maxPoolSize: 10,  // Maximum number of transactions in the mixing pool
+  mixingInterval: 60000,  // Process mixing pool every minute
+  maxBatchSize: 5,  // Maximum number of transactions to process in one batch
+  addDummyTransactions: true,
+  maxDummyTransactions: 3  // Maximum number of dummy transactions to add per batch
 };
 
 export const ERROR_MESSAGES = {
