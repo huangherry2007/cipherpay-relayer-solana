@@ -4,20 +4,21 @@ import { DEFAULT_CONFIG, ERROR_MESSAGES, SUCCESS_MESSAGES } from '../config/cons
 import { GasService } from '../services/gas';
 import { PrivacyService } from '../services/privacy';
 import { NetworkService } from '../services/network';
+import { TransactionManager, TransactionRequest } from './transaction';
+import { ProofVerifierFactory, ZKProof } from './proof';
 import { validateTransaction } from '../utils/validation';
 import { encryptTransaction } from '../utils/crypto';
 import * as bs58 from 'bs58';
 
 export class Relayer {
-  getAccountInfo(mockPublicKey: PublicKey) {
-    throw new Error('Method not implemented.');
-  }
   private connection: Connection;
   private keypair: Keypair;
   private gasService: GasService;
   private privacyService: PrivacyService;
   private networkService: NetworkService;
+  private transactionManager: TransactionManager;
   private config: RelayerConfig;
+
   constructor(config: Partial<RelayerConfig> = {}) {
     this.config = { ...DEFAULT_CONFIG, ...config } as RelayerConfig;
     this.connection = new Connection(this.config.solanaRpcUrl);
@@ -25,10 +26,13 @@ export class Relayer {
     this.gasService = new GasService(this.connection);
     this.privacyService = new PrivacyService();
     this.networkService = new NetworkService(this.connection);
+    this.transactionManager = new TransactionManager(this.connection, this.keypair, this.config.programId);
   }
 
   async submitTransaction(
-    shieldedTx: ShieldedTransaction
+    shieldedTx: ShieldedTransaction,
+    circuitType: string = 'transfer',
+    proof?: ZKProof
   ): Promise<RelayerResponse> {
     try {
       // Validate the transaction
@@ -38,6 +42,21 @@ export class Relayer {
           error: ERROR_MESSAGES.INVALID_PROOF
         };
       }
+
+      // If no proof provided, create a mock proof for testing
+      const mockProof: ZKProof = proof || {
+        a: ['0x0', '0x0'],
+        b: [['0x0', '0x0'], ['0x0', '0x0']],
+        c: ['0x0', '0x0'],
+        publicInputs: ['0x0', '0x0', '0x0', '0x0']
+      };
+
+      // Create transaction request
+      const request: TransactionRequest = {
+        shieldedTx,
+        circuitType: circuitType as any,
+        proof: mockProof
+      };
 
       // Estimate gas and check if we can cover it
       const gasEstimate = await this.gasService.estimateGas(shieldedTx);
@@ -51,29 +70,21 @@ export class Relayer {
       // Apply privacy measures
       await this.privacyService.applyPrivacyMeasures();
 
-      // Create and sign the transaction
-      const transaction = await this.createTransaction(shieldedTx);
-      transaction.sign(this.keypair);
+      // Process transaction using transaction manager
+      const result = await this.transactionManager.processTransaction(request);
 
-      // Submit the transaction
-      const txHash = await this.connection.sendRawTransaction(
-        transaction.serialize()
-      );
-
-      // Wait for confirmation
-      const confirmation = await this.connection.confirmTransaction(txHash);
-
-      if (confirmation.value.err) {
+      if (result.success) {
+        return {
+          success: true,
+          txHash: result.txHash
+        };
+      } else {
         return {
           success: false,
-          error: ERROR_MESSAGES.TRANSACTION_FAILED
+          error: result.error || ERROR_MESSAGES.TRANSACTION_FAILED
         };
       }
 
-      return {
-        success: true,
-        txHash
-      };
     } catch (error) {
       return {
         success: false,
@@ -82,32 +93,98 @@ export class Relayer {
     }
   }
 
-  private async createTransaction(
-    shieldedTx: ShieldedTransaction
-  ): Promise<Transaction> {
-    const transaction = new Transaction();
-    
-    // Add the program instruction
-    transaction.add({
-      programId: this.config.programId,
-      keys: [
-        { pubkey: this.keypair.publicKey, isSigner: true, isWritable: true },
-        // Add other required account keys
-      ],
-      data: Buffer.from(JSON.stringify(shieldedTx))
-    });
+  async submitTransactionWithProof(
+    shieldedTx: ShieldedTransaction,
+    circuitType: string,
+    proof: ZKProof
+  ): Promise<RelayerResponse> {
+    try {
+      // Validate the transaction
+      if (!validateTransaction(shieldedTx)) {
+        return {
+          success: false,
+          error: ERROR_MESSAGES.INVALID_PROOF
+        };
+      }
 
-    return transaction;
+      // Verify the proof
+      const proofValid = await ProofVerifierFactory.verifyProof(circuitType, proof);
+      if (!proofValid) {
+        return {
+          success: false,
+          error: ERROR_MESSAGES.INVALID_PROOF
+        };
+      }
+
+      // Create transaction request
+      const request: TransactionRequest = {
+        shieldedTx,
+        circuitType: circuitType as any,
+        proof
+      };
+
+      // Estimate gas and check if we can cover it
+      const gasEstimate = await this.gasService.estimateGas(shieldedTx);
+      if (!this.gasService.canCoverGas(gasEstimate)) {
+        return {
+          success: false,
+          error: ERROR_MESSAGES.INSUFFICIENT_GAS
+        };
+      }
+
+      // Apply privacy measures
+      await this.privacyService.applyPrivacyMeasures();
+
+      // Process transaction using transaction manager
+      const result = await this.transactionManager.processTransaction(request);
+
+      if (result.success) {
+        return {
+          success: true,
+          txHash: result.txHash
+        };
+      } else {
+        return {
+          success: false,
+          error: result.error || ERROR_MESSAGES.TRANSACTION_FAILED
+        };
+      }
+
+    } catch (error) {
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : ERROR_MESSAGES.NETWORK_ERROR
+      };
+    }
+  }
+
+  async estimateTransactionFee(
+    shieldedTx: ShieldedTransaction,
+    circuitType: string = 'transfer'
+  ): Promise<number> {
+    try {
+      const mockProof: ZKProof = {
+        a: ['0x0', '0x0'],
+        b: [['0x0', '0x0'], ['0x0', '0x0']],
+        c: ['0x0', '0x0'],
+        publicInputs: ['0x0', '0x0', '0x0', '0x0']
+      };
+
+      const request: TransactionRequest = {
+        shieldedTx,
+        circuitType: circuitType as any,
+        proof: mockProof
+      };
+
+      return await this.transactionManager.estimateTransactionFee(request);
+    } catch (error) {
+      throw new Error(`Failed to estimate transaction fee: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    }
   }
 
   async getTransactionStatus(txHash: string): Promise<TransactionMetadata> {
     try {
-      const status = await this.connection.getSignatureStatus(txHash);
-      return {
-        status: this.mapTransactionStatus(status.value),
-        timestamp: Date.now(),
-        retryCount: 0
-      };
+      return await this.transactionManager.getTransactionStatus(txHash);
     } catch (error) {
       return {
         status: 'failed',
@@ -118,12 +195,36 @@ export class Relayer {
     }
   }
 
-  private mapTransactionStatus(
-    status: any
-  ): 'pending' | 'failed' | 'confirmed' | 'submitted' {
-    if (!status) return 'pending';
-    if (status.err) return 'failed';
-    if (status.confirmations) return 'confirmed';
-    return 'submitted';
+  async verifyProof(circuitType: string, proof: ZKProof): Promise<boolean> {
+    try {
+      return await ProofVerifierFactory.verifyProof(circuitType, proof);
+    } catch (error) {
+      console.error('Proof verification failed:', error);
+      return false;
+    }
+  }
+
+  getAccountInfo(publicKey: PublicKey) {
+    return this.networkService.getAccountInfo(publicKey);
+  }
+
+  getConnection(): Connection {
+    return this.connection;
+  }
+
+  getKeypair(): Keypair {
+    return this.keypair;
+  }
+
+  getProgramId(): PublicKey {
+    return this.config.programId;
+  }
+
+  isPrivacyEnabled(): boolean {
+    return this.privacyService.isMixingEnabled();
+  }
+
+  getPrivacyConfig() {
+    return this.privacyService.getPrivacyConfig();
   }
 }
