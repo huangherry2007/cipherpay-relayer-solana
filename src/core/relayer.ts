@@ -76,7 +76,10 @@ export class Relayer {
       if (result.success) {
         return {
           success: true,
-          txHash: result.txHash
+          txHash: result.txHash,
+          transactionId: result.txHash,
+          status: result.metadata?.status || 'submitted',
+          estimatedFee: gasEstimate.totalCost
         };
       } else {
         return {
@@ -141,7 +144,10 @@ export class Relayer {
       if (result.success) {
         return {
           success: true,
-          txHash: result.txHash
+          txHash: result.txHash,
+          transactionId: result.txHash,
+          status: result.metadata?.status || 'submitted',
+          estimatedFee: gasEstimate.totalCost
         };
       } else {
         return {

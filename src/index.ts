@@ -102,6 +102,9 @@ const userService = new UserService({
 const authMiddleware = new AuthMiddleware(userService);
 const authRoutes = new AuthRoutes(userService, authMiddleware);
 
+// Export services for testing
+export { userService, authMiddleware };
+
 // Health check endpoint
 app.get('/health', (req, res) => {
   res.json({

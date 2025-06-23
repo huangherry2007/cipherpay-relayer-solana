@@ -1,7 +1,8 @@
 import { PublicKey } from '@solana/web3.js';
 
 export const DEFAULT_CONFIG = {
-  solanaRpcUrl: process.env.SOLANA_RPC_URL || 'https://api.mainnet-beta.solana.com',
+  //solanaRpcUrl: process.env.SOLANA_RPC_URL || 'https://api.mainnet-beta.solana.com',
+  solanaRpcUrl: process.env.SOLANA_RPC_URL || 'http://127.0.0.1:8899',
   maxGasPrice: 1000000000, // 1 SOL
   minGasPrice: 5000000,    // 0.005 SOL
   maxRetries: 3,
@@ -43,6 +44,6 @@ export const SUCCESS_MESSAGES = {
 };
 
 export const PROGRAM_IDS = {
-  CIPHERPAY_PROGRAM: new PublicKey(process.env.CIPHERPAY_PROGRAM_ID || ''),
-  RELAYER_PROGRAM: new PublicKey(process.env.RELAYER_PROGRAM_ID || '')
+  CIPHERPAY_PROGRAM: new PublicKey(process.env.CIPHERPAY_PROGRAM_ID || 'XeEs3gHZGdDhs3Lm1VoukrWrEnjdC3CA5VRtowN5MGz'),
+  RELAYER_PROGRAM: new PublicKey(process.env.RELAYER_PROGRAM_ID || 'XeEs3gHZGdDhs3Lm1VoukrWrEnjdC3CA5VRtowN5MGz')
 };

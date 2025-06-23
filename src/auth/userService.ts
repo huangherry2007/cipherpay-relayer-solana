@@ -10,6 +10,7 @@ import {
   CreateUserRequest, 
   UpdateUserRequest,
   ChangePasswordRequest,
+  GenerateApiKeyRequest,
   ApiKeyInfo,
   AuthToken,
   AuthConfig
@@ -29,7 +30,7 @@ export class UserService {
   private initializeDefaultUsers(): void {
     // Create default admin user
     const adminUser: User = {
-      id: 'admin-001',
+      id: uuidv4(),
       email: 'admin@cipherpay.com',
       username: 'admin',
       role: UserRole.ADMIN,
@@ -40,7 +41,7 @@ export class UserService {
 
     // Create default operator user
     const operatorUser: User = {
-      id: 'operator-001',
+      id: uuidv4(),
       email: 'operator@cipherpay.com',
       username: 'operator',
       role: UserRole.OPERATOR,
@@ -59,7 +60,7 @@ export class UserService {
 
     // Create default readonly user
     const readonlyUser: User = {
-      id: 'readonly-001',
+      id: uuidv4(),
       email: 'readonly@cipherpay.com',
       username: 'readonly',
       role: UserRole.READONLY,
@@ -89,15 +90,13 @@ export class UserService {
   }
 
   private generateToken(user: User): string {
-    const payload: AuthToken = {
+    const payload: Omit<AuthToken, 'exp' | 'iat'> = {
       userId: user.id,
       role: user.role,
-      permissions: user.permissions,
-      exp: Math.floor(Date.now() / 1000) + (24 * 60 * 60), // 24 hours
-      iat: Math.floor(Date.now() / 1000)
+      permissions: user.permissions
     };
 
-    return jwt.sign(payload, this.config.jwtSecret, { expiresIn: this.config.jwtExpiresIn });
+    return jwt.sign(payload, this.config.jwtSecret, { expiresIn: this.config.jwtExpiresIn as jwt.SignOptions['expiresIn'] });
   }
 
   private isAccountLocked(email: string): boolean {

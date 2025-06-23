@@ -215,15 +215,57 @@ export class TransactionManager {
 
   async estimateTransactionFee(request: TransactionRequest): Promise<number> {
     try {
-      const transaction = await this.createSolanaTransaction(request);
+      // Estimate compute units based on circuit type
+      const computeUnits = this.estimateComputeUnits(request.circuitType);
+      
+      // Get current fee rate
       const { feeCalculator } = await this.connection.getRecentBlockhash();
+      const feeRate = feeCalculator ? feeCalculator.lamportsPerSignature : 5000;
       
-      // Estimate compute units (this is a simplified estimation)
-      const estimatedComputeUnits = this.estimateComputeUnits(request.circuitType);
+      // Calculate total fee
+      const totalFee = computeUnits * feeRate;
       
-      return feeCalculator.lamportsPerSignature * estimatedComputeUnits;
+      return totalFee;
     } catch (error) {
       throw new Error(`Failed to estimate transaction fee: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    }
+  }
+
+  async cancelTransaction(transactionId: string): Promise<{ status: string }> {
+    try {
+      // In Solana, we can't directly cancel a transaction once it's submitted
+      // We can only check if it's still pending and hasn't been confirmed
+      const status = await this.getTransactionStatus(transactionId);
+      
+      if (status.status === 'pending') {
+        // Transaction is still pending, we can consider it "cancelled" for our purposes
+        return { status: 'cancelled' };
+      } else {
+        // Transaction has already been processed
+        return { status: status.status };
+      }
+    } catch (error) {
+      throw new Error(`Failed to cancel transaction: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    }
+  }
+
+  async estimateFees(transactionData: any, circuitType: string): Promise<number> {
+    try {
+      // Create a mock request for fee estimation
+      const mockRequest: TransactionRequest = {
+        shieldedTx: transactionData,
+        circuitType: circuitType as any,
+        proof: {
+          a: ['0x0', '0x0'],
+          b: [['0x0', '0x0'], ['0x0', '0x0']],
+          c: ['0x0', '0x0'],
+          publicInputs: ['0x0', '0x0', '0x0', '0x0']
+        }
+      };
+      
+      return await this.estimateTransactionFee(mockRequest);
+    } catch (error) {
+      throw new Error(`Failed to estimate fees: ${error instanceof Error ? error.message : 'Unknown error'}`);
     }
   }
 
@@ -231,34 +273,34 @@ export class TransactionManager {
     // Base compute units for a standard transaction
     let computeUnits = 200000;
 
-    // Add compute units based on circuit type
+    // Add compute units based on circuit type complexity
     switch (circuitType) {
       case 'transfer':
-        computeUnits += 400000;
+        computeUnits += 400000; // Standard transfer
         break;
       case 'merkle':
-        computeUnits += 300000;
+        computeUnits += 300000; // Merkle tree operations
         break;
       case 'nullifier':
-        computeUnits += 200000;
+        computeUnits += 250000; // Nullifier operations
         break;
       case 'stream':
-        computeUnits += 350000;
+        computeUnits += 500000; // Time-based operations
         break;
       case 'split':
-        computeUnits += 450000;
+        computeUnits += 600000; // Multi-output operations
         break;
       case 'condition':
-        computeUnits += 400000;
+        computeUnits += 450000; // Conditional operations
         break;
       case 'audit':
-        computeUnits += 300000;
+        computeUnits += 350000; // Audit operations
         break;
       case 'withdraw':
-        computeUnits += 500000;
+        computeUnits += 400000; // Withdrawal operations
         break;
       default:
-        computeUnits += 300000;
+        computeUnits += 400000; // Default
     }
 
     return computeUnits;

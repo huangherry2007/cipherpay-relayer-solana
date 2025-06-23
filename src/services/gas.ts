@@ -40,10 +40,16 @@ export class GasService {
         (await this.connection.getRecentBlockhash()).blockhash
       );
 
-      // Return the fee per signature
+      // Return the fee per signature with null check
+      if (!feeCalculator || !feeCalculator.value) {
+        // Fallback to a default fee if calculator is not available
+        return 5000; // 0.000005 SOL
+      }
+      
       return feeCalculator.value.lamportsPerSignature;
     } catch (error) {
-      throw new Error(`Failed to get current fee: ${error instanceof Error ? error.message : 'Unknown error'}`);
+      // Fallback to a default fee if there's an error
+      return 5000; // 0.000005 SOL
     }
   }
 

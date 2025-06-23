@@ -22,6 +22,9 @@ export interface ShieldedTransaction {
 export interface RelayerResponse {
   success: boolean;
   txHash?: string;
+  transactionId?: string;
+  status?: string;
+  estimatedFee?: number;
   error?: string;
 }
 

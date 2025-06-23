@@ -59,9 +59,20 @@ describe('Groth16 Proof Verification Tests', () => {
 
     test('should verify verification key files exist', () => {
       const circuitsDir = path.join(__dirname, '../src/zk/circuits');
+      // Map circuit types to their actual filenames
+      const filenameMap: { [key: string]: string } = {
+        'transfer': 'verifier-transfer.json',
+        'merkle': 'verifier-merkle.json',
+        'nullifier': 'verifier-nullifier.json',
+        'stream': 'verifier-zkStream.json',
+        'split': 'verifier-zkSplit.json',
+        'condition': 'verifier-zkCondition.json',
+        'audit': 'verifier-audit_proof.json',
+        'withdraw': 'verifier-withdraw.json'
+      };
       
       circuitTypes.forEach(circuitType => {
-        const filename = `verifier-${circuitType === 'audit' ? 'audit_proof' : circuitType}.json`;
+        const filename = filenameMap[circuitType];
         const filePath = path.join(circuitsDir, filename);
         
         expect(fs.existsSync(filePath)).toBe(true);
@@ -140,7 +151,8 @@ describe('Groth16 Proof Verification Tests', () => {
         expect(result).toHaveProperty('verificationTime');
         expect(typeof result.isValid).toBe('boolean');
         expect(typeof result.verificationTime).toBe('number');
-        expect(result.verificationTime).toBeGreaterThan(0);
+        // Allow 0 verification time for invalid proofs that fail quickly
+        expect(result.verificationTime).toBeGreaterThanOrEqual(0);
       }
     }, 30000);
   });
