@@ -215,17 +215,38 @@ export class TransactionManager {
 
   async estimateTransactionFee(request: TransactionRequest): Promise<number> {
     try {
-      // Estimate compute units based on circuit type
+      // Create a mock transaction to estimate fees
+      const mockTransaction = new Transaction();
+      const { blockhash } = await this.connection.getLatestBlockhash();
+      mockTransaction.recentBlockhash = blockhash;
+      mockTransaction.feePayer = this.keypair.publicKey;
+      
+      // Add a mock instruction to estimate fees
+      const mockInstruction = {
+        programId: this.programId,
+        keys: [
+          { pubkey: this.keypair.publicKey, isSigner: true, isWritable: true }
+        ],
+        data: Buffer.from([0]) // Simple instruction data
+      };
+      
+      mockTransaction.add(mockInstruction);
+      
+      // Get fee for the message using modern API
+      const fee = await this.connection.getFeeForMessage(
+        mockTransaction.compileMessage(),
+        'confirmed'
+      );
+      
+      if (fee.value === null) {
+        throw new Error('Failed to get fee estimate from network');
+      }
+      
+      // Add compute unit cost based on circuit type
       const computeUnits = this.estimateComputeUnits(request.circuitType);
+      const computeUnitCost = Math.ceil(computeUnits / 1000) * 1000; // Rough estimate
       
-      // Get current fee rate
-      const { feeCalculator } = await this.connection.getRecentBlockhash();
-      const feeRate = feeCalculator ? feeCalculator.lamportsPerSignature : 5000;
-      
-      // Calculate total fee
-      const totalFee = computeUnits * feeRate;
-      
-      return totalFee;
+      return fee.value + computeUnitCost;
     } catch (error) {
       throw new Error(`Failed to estimate transaction fee: ${error instanceof Error ? error.message : 'Unknown error'}`);
     }

@@ -1,8 +1,8 @@
 import { PublicKey } from '@solana/web3.js';
 
 export const DEFAULT_CONFIG = {
-  //solanaRpcUrl: process.env.SOLANA_RPC_URL || 'https://api.mainnet-beta.solana.com',
   solanaRpcUrl: process.env.SOLANA_RPC_URL || 'http://127.0.0.1:8899',
+  //solanaRpcUrl: process.env.SOLANA_RPC_URL || 'https://api.mainnet-beta.solana.com',
   maxGasPrice: 1000000000, // 1 SOL
   minGasPrice: 5000000,    // 0.005 SOL
   maxRetries: 3,

@@ -46,9 +46,15 @@ const port = process.env.PORT || DEFAULT_CONFIG.port;
 // Middleware
 app.use(helmet());
 app.use(cors({
-  origin: DEFAULT_CONFIG.corsOrigins,
-  credentials: true
+  origin: ['http://localhost:3001', 'http://127.0.0.1:3001', 'http://localhost:3000', 'http://127.0.0.1:3000', '*'],
+  credentials: true,
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With']
 }));
+
+// Handle preflight requests
+app.options('*', cors());
+
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true }));
 
@@ -66,7 +72,7 @@ const limiter = rateLimit({
 const speedLimiter = slowDown({
   windowMs: 15 * 60 * 1000, // 15 minutes
   delayAfter: 50, // allow 50 requests per 15 minutes, then...
-  delayMs: 500 // begin adding 500ms of delay per request above 50
+  delayMs: () => 500 // begin adding 500ms of delay per request above 50
 });
 
 app.use(limiter);
@@ -115,14 +121,131 @@ app.get('/health', (req, res) => {
   });
 });
 
+// Root endpoint
+app.get('/', (req, res) => {
+  res.json({
+    success: true,
+    service: 'cipherpay-relayer-solana',
+    version: '0.1.0',
+    timestamp: new Date().toISOString(),
+    endpoints: {
+      health: '/health',
+      status: '/api/v1/status',
+      auth: '/api/v1/auth',
+      circuits: '/api/v1/circuits',
+      merkle: '/api/v1/merkle',
+      notes: '/api/v1/notes',
+      balance: '/api/v1/balance'
+    },
+    documentation: 'See /api/v1/status for detailed endpoint information'
+  });
+});
+
 // Authentication routes
 app.use('/api/v1/auth', authRoutes.getRouter());
+
+// Public API status endpoint (no authentication required)
+app.get('/api/v1/status', (req, res) => {
+  res.json({
+    success: true,
+    status: 'healthy',
+    timestamp: new Date().toISOString(),
+    service: 'cipherpay-relayer-solana',
+    version: '0.1.0',
+    endpoints: {
+      auth: '/api/v1/auth',
+      transactions: '/api/v1/submit-transaction',
+      proofs: '/api/v1/verify-proof',
+      circuits: '/api/v1/circuits',
+      system: '/api/v1/system/status'
+    }
+  });
+});
+
+// Get supported circuits endpoint (public - no authentication required)
+app.get('/api/v1/circuits', (req, res) => {
+  const circuits = [
+    { name: 'transfer', description: 'Private transfer circuit' },
+    { name: 'merkle', description: 'Merkle tree membership circuit' },
+    { name: 'nullifier', description: 'Nullifier circuit' },
+    { name: 'stream', description: 'ZK Stream circuit' },
+    { name: 'split', description: 'ZK Split circuit' },
+    { name: 'condition', description: 'ZK Condition circuit' },
+    { name: 'audit', description: 'Audit proof circuit' },
+    { name: 'withdraw', description: 'Withdraw circuit' }
+  ];
+
+  res.json({
+    success: true,
+    circuits
+  });
+});
+
+// Merkle tree endpoints (public - no authentication required)
+app.get('/api/v1/merkle/root', (req, res) => {
+  res.json({
+    success: true,
+    root: '0x0000000000000000000000000000000000000000000000000000000000000000',
+    timestamp: new Date().toISOString()
+  });
+});
+
+app.get('/api/v1/merkle/path/:commitment', (req, res) => {
+  const { commitment } = req.params;
+  res.json({
+    success: true,
+    commitment,
+    path: [],
+    siblings: [],
+    timestamp: new Date().toISOString()
+  });
+});
+
+// Notes endpoints (public - no authentication required)
+app.get('/api/v1/notes', (req, res) => {
+  res.json({
+    success: true,
+    notes: [],
+    count: 0,
+    timestamp: new Date().toISOString()
+  });
+});
+
+app.get('/api/v1/notes/spendable', (req, res) => {
+  res.json({
+    success: true,
+    notes: [],
+    count: 0,
+    timestamp: new Date().toISOString()
+  });
+});
+
+// Balance endpoint (public - no authentication required)
+app.get('/api/v1/balance', (req, res) => {
+  res.json({
+    success: true,
+    balance: '0',
+    currency: 'SOL',
+    timestamp: new Date().toISOString()
+  });
+});
+
+// Health endpoint (alternative path)
+app.get('/api/v1/health', (req, res) => {
+  res.json({
+    success: true,
+    status: 'healthy',
+    timestamp: new Date().toISOString(),
+    service: 'cipherpay-relayer-solana',
+    version: '0.1.0'
+  });
+});
 
 // Protected API routes
 app.use('/api/v1', authMiddleware.authenticate);
 
 // Submit transaction endpoint
-app.post('/api/v1/submit-transaction', 
+app.post('/api/v1/submit-transaction',
   authMiddleware.requirePermission(Permission.SUBMIT_TRANSACTION),
   async (req, res) => {
     try {
@@ -171,7 +294,7 @@ app.post('/api/v1/submit-transaction',
 );
 
 // Get transaction status endpoint
-app.get('/api/v1/transaction/:transactionId', 
+app.get('/api/v1/transaction/:transactionId',
   authMiddleware.requirePermission(Permission.VIEW_TRANSACTIONS),
   async (req, res) => {
     try {
@@ -201,7 +324,7 @@ app.get('/api/v1/transaction/:transactionId',
 );
 
 // Cancel transaction endpoint
-app.post('/api/v1/transaction/:transactionId/cancel', 
+app.post('/api/v1/transaction/:transactionId/cancel',
   authMiddleware.requirePermission(Permission.CANCEL_TRANSACTION),
   async (req, res) => {
     try {
@@ -231,7 +354,7 @@ app.post('/api/v1/transaction/:transactionId/cancel',
 );
 
 // Estimate fees endpoint
-app.post('/api/v1/estimate-fees', 
+app.post('/api/v1/estimate-fees',
   authMiddleware.requirePermission(Permission.VIEW_FEES),
   async (req, res) => {
     try {
@@ -267,7 +390,7 @@ app.post('/api/v1/estimate-fees',
 );
 
 // Verify proof endpoint
-app.post('/api/v1/verify-proof', 
+app.post('/api/v1/verify-proof',
   authMiddleware.requirePermission(Permission.VERIFY_PROOF),
   async (req, res) => {
     try {
@@ -308,8 +431,27 @@ app.post('/api/v1/verify-proof',
   }
 );
 
-// Get supported circuits endpoint
-app.get('/api/v1/circuits', 
+// Get supported circuits endpoint (public - no authentication required)
+app.get('/api/v1/circuits', (req, res) => {
+  const circuits = [
+    { name: 'transfer', description: 'Private transfer circuit' },
+    { name: 'merkle', description: 'Merkle tree membership circuit' },
+    { name: 'nullifier', description: 'Nullifier circuit' },
+    { name: 'stream', description: 'ZK Stream circuit' },
+    { name: 'split', description: 'ZK Split circuit' },
+    { name: 'condition', description: 'ZK Condition circuit' },
+    { name: 'audit', description: 'Audit proof circuit' },
+    { name: 'withdraw', description: 'Withdraw circuit' }
+  ];
+
+  res.json({
+    success: true,
+    circuits
+  });
+});
+
+// Get supported circuits endpoint (protected - for authenticated users)
+app.get('/api/v1/circuits/protected',
   authMiddleware.requirePermission(Permission.VIEW_CIRCUITS),
   (req, res) => {
     const circuits = [
@@ -331,7 +473,7 @@ app.get('/api/v1/circuits',
 );
 
 // System status endpoint
-app.get('/api/v1/system/status', 
+app.get('/api/v1/system/status',
   authMiddleware.requirePermission(Permission.VIEW_SYSTEM_STATUS),
   (req, res) => {
     const status = {
@@ -349,7 +491,7 @@ app.get('/api/v1/system/status',
 );
 
 // Admin-only endpoints
-app.get('/api/v1/admin/logs', 
+app.get('/api/v1/admin/logs',
   authMiddleware.requirePermission(Permission.VIEW_LOGS),
   (req, res) => {
     // In a real implementation, you would return actual logs
@@ -378,11 +520,21 @@ app.use((err: Error, req: express.Request, res: express.Response, next: express.
   });
 });
 
-// 404 handler
+// 404 handler with logging
 app.use('*', (req, res) => {
+  logger.warn('Endpoint not found', {
+    method: req.method,
+    url: req.url,
+    path: req.path,
+    headers: req.headers,
+    timestamp: new Date().toISOString()
+  });
+
   res.status(404).json({
     success: false,
-    error: 'Endpoint not found'
+    error: 'Endpoint not found',
+    requestedPath: req.path,
+    method: req.method
   });
 });
 

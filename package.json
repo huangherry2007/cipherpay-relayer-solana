@@ -4,7 +4,7 @@
   "description": "CipherPay Relayer Service for Solana - Handles private transaction submission and gas abstraction",
   "main": "dist/index.js",
   "scripts": {
-    "build": "tsc",
+    "build": "tsc && mkdir -p dist/zk/circuits && cp src/zk/circuits/*.json dist/zk/circuits/",
     "start": "node dist/index.js",
     "dev": "ts-node src/index.ts",
     "test": "jest",
@@ -42,6 +42,7 @@
     "@types/jest": "^29.5.12",
     "@types/jsonwebtoken": "^9.0.5",
     "@types/node": "^20.10.5",
+    "@types/snarkjs": "^0.7.9",
     "@types/uuid": "^9.0.7",
     "@typescript-eslint/eslint-plugin": "^6.15.0",
     "@typescript-eslint/parser": "^6.15.0",
