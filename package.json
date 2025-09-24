@@ -8,6 +8,8 @@
     "build": "tsc -p tsconfig.json",
     "start": "node dist/index.js",
     "migrate": "tsx scripts/migrate.ts",
+    "copy-keys": "node scripts/copy-verification-keys.js",
+    "init-tree": "node scripts/init-canonical-tree.js",
     "test": "jest",
     "test:watch": "jest --watch",
     "test:coverage": "jest --coverage"
