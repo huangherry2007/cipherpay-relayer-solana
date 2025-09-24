@@ -1,15 +1,19 @@
 // tests/api/submit-routes.test.ts
-import { describe, it, expect, beforeEach, jest } from '@jest/globals';
+import { jest } from '@jest/globals';
 import request from 'supertest';
 import express from 'express';
 import { submitRouter } from '@/server/routes/submit.js';
-import { mockProofVerifier, mockProofs } from '../mocks/proof-mocks.js';
-import { mockSolanaRelayer } from '../mocks/solana-mocks.js';
+import { mockProofVerifier, mockProofs } from '../mocks/proof-mocks.ts';
+import { mockSolanaRelayer } from '../mocks/solana-mocks.ts';
 
 // Mock the SolanaRelayer
 jest.mock('@/services/solana-relayer.js', () => ({
   SolanaRelayer: jest.fn().mockImplementation(() => mockSolanaRelayer),
 }));
+
+beforeEach(() => {
+  jest.clearAllMocks();
+});
 
 describe('Submit Routes API', () => {
   let app: express.Application;
@@ -29,8 +33,8 @@ describe('Submit Routes API', () => {
       const requestBody = {
         proof: mockProofs.deposit.proof,
         publicSignals: mockProofs.deposit.publicSignals,
-        depositHash: 'deposit-hash-32-bytes-long-123456789012',
-        commitment: 'commitment-32-bytes-long-123456789012',
+        depositHash: 'a'.repeat(64),
+        commitment: 'b'.repeat(64),
       };
 
       const response = await request(app)
@@ -60,14 +64,14 @@ describe('Submit Routes API', () => {
       const requestBody = {
         proof: mockProofs.deposit.proof,
         publicSignals: mockProofs.deposit.publicSignals,
-        depositHash: 'deposit-hash-32-bytes-long-123456789012',
-        commitment: 'commitment-32-bytes-long-123456789012',
+        depositHash: 'a'.repeat(64),
+        commitment: 'b'.repeat(64),
       };
 
       const response = await request(app)
         .post('/api/v1/submit/deposit')
         .send(requestBody)
-        .expect(500);
+        .expect(400);
 
       expect(response.body.message).toContain('Invalid proof');
     });
@@ -94,9 +98,9 @@ describe('Submit Routes API', () => {
       const requestBody = {
         proof: mockProofs.transfer.proof,
         publicSignals: mockProofs.transfer.publicSignals,
-        nullifier: 'nullifier-32-bytes-long-123456789012',
-        out1Commitment: 'out1-commitment-32-bytes-long-123456789012',
-        out2Commitment: 'out2-commitment-32-bytes-long-123456789012',
+        nullifier: 'c'.repeat(64),
+        out1Commitment: 'd'.repeat(64),
+        out2Commitment: 'e'.repeat(64),
       };
 
       const response = await request(app)
@@ -130,10 +134,10 @@ describe('Submit Routes API', () => {
       const requestBody = {
         proof: mockProofs.withdraw.proof,
         publicSignals: mockProofs.withdraw.publicSignals,
-        nullifier: 'nullifier-32-bytes-long-123456789012',
-        recipient: 'recipient-address-123',
+        nullifier: 'f'.repeat(64),
+        recipient: '11111111111111111111111111111111',
         amount: '1000000',
-        mint: 'mint-address-456',
+        mint: 'So11111111111111111111111111111111111111112',
       };
 
       const response = await request(app)

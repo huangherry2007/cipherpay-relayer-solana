@@ -1,7 +1,7 @@
 // tests/solana/event-watcher.test.ts
-import { describe, it, expect, beforeEach, jest } from '@jest/globals';
+import { jest } from '@jest/globals';
 import { EventWatcher } from '@/solana/event-watcher.js';
-import { mockSolanaProgram } from '../mocks/solana-mocks.js';
+import { mockSolanaProgram } from '../mocks/solana-mocks.ts';
 
 // Mock the SolanaProgram
 jest.mock('@/solana/program.js', () => ({

@@ -57,7 +57,10 @@ export class TxManager {
 
       return tx;
     } catch (error) {
-      throw new Error(`Shielded deposit failed: ${error}`);
+      const message = (error && typeof error === 'object' && 'message' in error)
+        ? (error as Error).message
+        : String(error);
+      throw new Error(`Shielded deposit failed: ${message}`);
     }
   }
 

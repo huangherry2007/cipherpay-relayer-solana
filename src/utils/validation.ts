@@ -75,29 +75,44 @@ export class ValidationError extends Error {
 }
 
 export class ProofVerificationError extends Error {
+  statusCode: number;
   constructor(message: string, public circuit?: string) {
     super(message);
     this.name = 'ProofVerificationError';
+    this.statusCode = 400;
   }
 }
 
 export class SolanaTransactionError extends Error {
+  statusCode: number;
   constructor(message: string, public txSignature?: string) {
     super(message);
     this.name = 'SolanaTransactionError';
+    this.statusCode = 500;
   }
 }
 
 export class MerkleTreeError extends Error {
+  statusCode: number;
   constructor(message: string, public operation?: string) {
     super(message);
     this.name = 'MerkleTreeError';
+    this.statusCode = 500;
   }
 }
 
 // Error handler for API routes
 export function handleApiError(error: unknown, req: any, res: any, next: any) {
   console.error('API Error:', error);
+  const maybeErr: any = error as any;
+
+  if (maybeErr && typeof maybeErr.statusCode === 'number') {
+    return res.status(maybeErr.statusCode).json({
+      ok: false,
+      error: maybeErr.name || 'Error',
+      message: maybeErr.message || 'An error occurred',
+    });
+  }
 
   if (error instanceof ValidationError) {
     return res.status(400).json({
@@ -114,6 +129,19 @@ export function handleApiError(error: unknown, req: any, res: any, next: any) {
       error: 'ProofVerificationError',
       message: error.message,
       circuit: error.circuit,
+    });
+  }
+
+  // Fallback: identify proof verification failures by shape/name to avoid instanceof pitfalls in ESM/jest
+  if (
+    maybeErr &&
+    (maybeErr.name === 'ProofVerificationError' ||
+      (typeof maybeErr.message === 'string' && (maybeErr.message.includes('Proof verification failed') || maybeErr.message.includes('Invalid proof'))))
+  ) {
+    return res.status(400).json({
+      ok: false,
+      error: 'ProofVerificationError',
+      message: maybeErr.message ?? 'Proof verification failed',
     });
   }
 

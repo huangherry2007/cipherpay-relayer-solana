@@ -1,8 +1,8 @@
 // tests/solana/tx-manager.test.ts
-import { describe, it, expect, beforeEach, jest } from '@jest/globals';
+import { jest } from '@jest/globals';
 import { PublicKey, Keypair } from '@solana/web3.js';
 import { TxManager } from '@/solana/tx-manager.js';
-import { mockSolanaProgram } from '../mocks/solana-mocks.js';
+import { mockSolanaProgram } from '../mocks/solana-mocks.ts';
 
 // Mock the SolanaProgram
 jest.mock('@/solana/program.js', () => ({

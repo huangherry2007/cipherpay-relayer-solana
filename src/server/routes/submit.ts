@@ -29,7 +29,12 @@ export function submitRouter(verifier: ProofVerifier, relayer: SolanaRelayer) {
       try {
         await verifier.verify("deposit", proof, signals);
       } catch (error) {
-        throw new ProofVerificationError(`Proof verification failed: ${error}`, "deposit");
+        return res.status(400).json({
+          ok: false,
+          error: 'ProofVerificationError',
+          message: `Proof verification failed: ${error}`,
+          circuit: 'deposit'
+        });
       }
       
       // Process the shielded deposit through Solana
@@ -69,7 +74,12 @@ export function submitRouter(verifier: ProofVerifier, relayer: SolanaRelayer) {
       try {
         await verifier.verify("transfer", proof, signals);
       } catch (error) {
-        throw new ProofVerificationError(`Proof verification failed: ${error}`, "transfer");
+        return res.status(400).json({
+          ok: false,
+          error: 'ProofVerificationError',
+          message: `Proof verification failed: ${error}`,
+          circuit: 'transfer'
+        });
       }
       
       // Process the shielded transfer through Solana
@@ -110,7 +120,12 @@ export function submitRouter(verifier: ProofVerifier, relayer: SolanaRelayer) {
       try {
         await verifier.verify("withdraw", proof, signals);
       } catch (error) {
-        throw new ProofVerificationError(`Proof verification failed: ${error}`, "withdraw");
+        return res.status(400).json({
+          ok: false,
+          error: 'ProofVerificationError',
+          message: `Proof verification failed: ${error}`,
+          circuit: 'withdraw'
+        });
       }
       
       // Process the shielded withdraw through Solana

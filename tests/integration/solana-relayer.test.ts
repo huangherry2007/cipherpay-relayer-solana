@@ -1,25 +1,21 @@
 // tests/integration/solana-relayer.test.ts
-import { describe, it, expect, beforeEach, jest } from '@jest/globals';
+import { jest } from '@jest/globals';
 import { PublicKey, Keypair } from '@solana/web3.js';
-import { SolanaRelayer } from '@/services/solana-relayer.js';
-import { mockSolanaProgram, mockTxManager, mockEventWatcher } from '../mocks/solana-mocks.js';
-import { mockCanonicalTree, mockTreeResponses } from '../mocks/merkle-mocks.js';
-import { mockProofVerifier, mockProofs } from '../mocks/proof-mocks.js';
+import { mockSolanaProgram, mockTxManager, mockEventWatcher } from '../mocks/solana-mocks.ts';
+import { mockCanonicalTree, mockTreeResponses } from '../mocks/merkle-mocks.ts';
+import { mockProofVerifier, mockProofs } from '../mocks/proof-mocks.ts';
 
-// Mock dependencies
-jest.mock('@/solana/program.js', () => ({
+// Mock dependencies via solana barrel using ESM mock before importing subject
+await jest.unstable_mockModule('@/solana/index.js', () => ({
   SolanaProgram: {
     create: jest.fn().mockResolvedValue(mockSolanaProgram) as any,
   },
-}));
-
-jest.mock('@/solana/tx-manager.js', () => ({
   TxManager: jest.fn().mockImplementation(() => mockTxManager),
-}));
-
-jest.mock('@/solana/event-watcher.js', () => ({
   EventWatcher: jest.fn().mockImplementation(() => mockEventWatcher),
 }));
+
+const { SolanaRelayer } = await import('@/services/solana-relayer.js');
+
 
 jest.mock('@/services/merkle/canonical-tree.js', () => ({
   CanonicalTree: mockCanonicalTree,
@@ -36,10 +32,8 @@ describe('SolanaRelayer Integration', () => {
     jest.clearAllMocks();
     
     // Setup mock responses
-    mockTreeResponses.appendResult = {
-      index: 5,
-      root: Buffer.from('new-root-32-bytes-long-123456789012', 'utf8'),
-    };
+    mockCanonicalTree.getRoot.mockResolvedValue({ root: mockTreeResponses.root, nextIndex: 0 } as any);
+    mockCanonicalTree.append.mockResolvedValue(mockTreeResponses.appendResult as any);
     
     mockTxManager.submitShieldedDepositAtomic.mockResolvedValue('deposit-tx-123' as any);
     mockTxManager.callShieldedTransfer.mockResolvedValue('transfer-tx-456' as any);

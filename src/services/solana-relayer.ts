@@ -71,7 +71,10 @@ export class SolanaRelayer {
 
       return txSignature;
     } catch (error) {
-      throw new Error(`Failed to process shielded deposit: ${error}`);
+      const message = (error && typeof error === 'object' && 'message' in error)
+        ? (error as Error).message
+        : String(error);
+      throw new Error(`Failed to process shielded deposit: ${message}`);
     }
   }
 
@@ -103,7 +106,10 @@ export class SolanaRelayer {
 
       return txSignature;
     } catch (error) {
-      throw new Error(`Failed to process shielded transfer: ${error}`);
+      const message = (error && typeof error === 'object' && 'message' in error)
+        ? (error as Error).message
+        : String(error);
+      throw new Error(`Failed to process shielded transfer: ${message}`);
     }
   }
 
@@ -133,7 +139,10 @@ export class SolanaRelayer {
 
       return txSignature;
     } catch (error) {
-      throw new Error(`Failed to process shielded withdraw: ${error}`);
+      const message = (error && typeof error === 'object' && 'message' in error)
+        ? (error as Error).message
+        : String(error);
+      throw new Error(`Failed to process shielded withdraw: ${message}`);
     }
   }
 

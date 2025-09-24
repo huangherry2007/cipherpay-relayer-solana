@@ -1,7 +1,7 @@
 // jest.config.js
 export default {
   preset: 'ts-jest/presets/default-esm',
-  extensionsToTreatAsEsm: ['.ts'],
+  extensionsToTreatAsEsm: ['.ts', '.tsx'],
   testEnvironment: 'node',
   roots: ['<rootDir>/tests'],
   testMatch: ['**/*.test.ts'],
@@ -12,14 +12,26 @@ export default {
   ],
   coverageDirectory: 'coverage',
   coverageReporters: ['text', 'lcov', 'html'],
-  setupFilesAfterEnv: ['<rootDir>/tests/setup.ts'],
-  moduleNameMapping: {
+  setupFilesAfterEnv: ['<rootDir>/tests/setup.cjs'],
+  moduleNameMapper: {
+    '^@/(.*)\\.js$': '<rootDir>/src/$1.ts',
     '^@/(.*)$': '<rootDir>/src/$1',
   },
   transform: {
-    '^.+\\.ts$': ['ts-jest', {
+    '^.+\\.(ts|tsx)$': ['ts-jest', {
       useESM: true,
+      tsconfig: {
+        module: 'ESNext'
+      }
     }],
+  },
+  globals: {
+    'ts-jest': {
+      useESM: true,
+      tsconfig: {
+        module: 'ESNext'
+      }
+    }
   },
   testTimeout: 30000,
   moduleFileExtensions: ['ts', 'tsx', 'js', 'jsx', 'json', 'node'],
