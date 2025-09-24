@@ -24,8 +24,8 @@ describe('TxManager', () => {
       const mockTxSignature = 'mock-tx-signature-123';
       const mockMethods = {
         accounts: jest.fn().mockReturnThis(),
-        rpc: jest.fn().mockResolvedValue(mockTxSignature),
-      };
+        rpc: jest.fn().mockResolvedValue(mockTxSignature) as any,
+      } as any;
       mockSolanaProgram.program.methods.shieldedDepositAtomic.mockReturnValue(mockMethods);
 
       const args = {
@@ -50,7 +50,7 @@ describe('TxManager', () => {
       const mockError = new Error('Transaction failed');
       const mockMethods = {
         accounts: jest.fn().mockReturnThis(),
-        rpc: jest.fn().mockRejectedValue(mockError),
+        rpc: jest.fn().mockRejectedValue(mockError) as any,
       };
       mockSolanaProgram.program.methods.shieldedDepositAtomic.mockReturnValue(mockMethods);
 
@@ -69,7 +69,7 @@ describe('TxManager', () => {
       const mockTxSignature = 'mock-transfer-signature-456';
       const mockMethods = {
         accounts: jest.fn().mockReturnThis(),
-        rpc: jest.fn().mockResolvedValue(mockTxSignature),
+        rpc: jest.fn().mockResolvedValue(mockTxSignature) as any,
       };
       mockSolanaProgram.program.methods.shieldedTransfer.mockReturnValue(mockMethods);
 
@@ -95,7 +95,7 @@ describe('TxManager', () => {
       const mockTxSignature = 'mock-withdraw-signature-789';
       const mockMethods = {
         accounts: jest.fn().mockReturnThis(),
-        rpc: jest.fn().mockResolvedValue(mockTxSignature),
+        rpc: jest.fn().mockResolvedValue(mockTxSignature) as any,
       };
       mockSolanaProgram.program.methods.shieldedWithdraw.mockReturnValue(mockMethods);
 
@@ -124,7 +124,7 @@ describe('TxManager', () => {
   describe('getTransactionStatus', () => {
     it('should get transaction status', async () => {
       const mockStatus = { status: 'confirmed' };
-      mockSolanaProgram.connection.getTransaction.mockResolvedValue(mockStatus);
+      mockSolanaProgram.connection.getTransaction.mockResolvedValue(mockStatus as any);
 
       const signature = 'test-signature-123';
       const result = await txManager.getTransactionStatus(signature);

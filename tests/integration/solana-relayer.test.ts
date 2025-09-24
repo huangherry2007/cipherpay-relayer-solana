@@ -9,7 +9,7 @@ import { mockProofVerifier, mockProofs } from '../mocks/proof-mocks.js';
 // Mock dependencies
 jest.mock('@/solana/program.js', () => ({
   SolanaProgram: {
-    create: jest.fn().mockResolvedValue(mockSolanaProgram),
+    create: jest.fn().mockResolvedValue(mockSolanaProgram) as any,
   },
 }));
 
@@ -41,10 +41,10 @@ describe('SolanaRelayer Integration', () => {
       root: Buffer.from('new-root-32-bytes-long-123456789012', 'utf8'),
     };
     
-    mockTxManager.submitShieldedDepositAtomic.mockResolvedValue('deposit-tx-123');
-    mockTxManager.callShieldedTransfer.mockResolvedValue('transfer-tx-456');
-    mockTxManager.callShieldedWithdraw.mockResolvedValue('withdraw-tx-789');
-    mockProofVerifier.verify.mockResolvedValue(true);
+    mockTxManager.submitShieldedDepositAtomic.mockResolvedValue('deposit-tx-123' as any);
+    mockTxManager.callShieldedTransfer.mockResolvedValue('transfer-tx-456' as any);
+    mockTxManager.callShieldedWithdraw.mockResolvedValue('withdraw-tx-789' as any);
+    mockProofVerifier.verify.mockResolvedValue(true as any);
 
     relayer = await SolanaRelayer.create(
       {
@@ -82,7 +82,7 @@ describe('SolanaRelayer Integration', () => {
     });
 
     it('should handle proof verification failure', async () => {
-      mockProofVerifier.verify.mockRejectedValue(new Error('Invalid proof'));
+      mockProofVerifier.verify.mockRejectedValue(new Error('Invalid proof') as any);
 
       const depositHash = Buffer.from('deposit-hash-32-bytes-long-123456789012', 'utf8');
       const commitment = Buffer.from('commitment-32-bytes-long-123456789012', 'utf8');
@@ -98,7 +98,7 @@ describe('SolanaRelayer Integration', () => {
     });
 
     it('should handle Solana transaction failure', async () => {
-      mockTxManager.submitShieldedDepositAtomic.mockRejectedValue(new Error('Transaction failed'));
+      mockTxManager.submitShieldedDepositAtomic.mockRejectedValue(new Error('Transaction failed') as any);
 
       const depositHash = Buffer.from('deposit-hash-32-bytes-long-123456789012', 'utf8');
       const commitment = Buffer.from('commitment-32-bytes-long-123456789012', 'utf8');
@@ -191,7 +191,7 @@ describe('SolanaRelayer Integration', () => {
   describe('utility methods', () => {
     it('should get transaction status', async () => {
       const mockStatus = { status: 'confirmed' };
-      mockTxManager.getTransactionStatus.mockResolvedValue(mockStatus);
+      mockTxManager.getTransactionStatus.mockResolvedValue(mockStatus as any);
 
       const result = await relayer.getTransactionStatus('test-signature');
 
@@ -201,7 +201,7 @@ describe('SolanaRelayer Integration', () => {
 
     it('should get current Merkle root', async () => {
       const mockRoot = Buffer.from('current-root-32-bytes-long-123456789012', 'utf8');
-      mockCanonicalTree.getRoot.mockResolvedValue({ root: mockRoot, nextIndex: 5 });
+      mockCanonicalTree.getRoot.mockResolvedValue({ root: mockRoot, nextIndex: 5 } as any);
 
       const result = await relayer.getCurrentRoot();
 

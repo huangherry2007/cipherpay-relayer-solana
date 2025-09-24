@@ -42,7 +42,7 @@ describe('EventWatcher', () => {
 
       // Get the deposit event listener
       const depositListener = mockSolanaProgram.program.addEventListener.mock.calls
-        .find(call => call[0] === 'depositCompleted')[1];
+        .find(call => call[0] === 'depositCompleted')?.[1] as any;
 
       const mockEventData = {
         depositHash: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32],
@@ -76,7 +76,7 @@ describe('EventWatcher', () => {
 
       // Get the transfer event listener
       const transferListener = mockSolanaProgram.program.addEventListener.mock.calls
-        .find(call => call[0] === 'transferCompleted')[1];
+        .find(call => call[0] === 'transferCompleted')?.[1] as any;
 
       const mockEventData = {
         nullifier: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32],
@@ -116,7 +116,7 @@ describe('EventWatcher', () => {
 
       // Get the withdraw event listener
       const withdrawListener = mockSolanaProgram.program.addEventListener.mock.calls
-        .find(call => call[0] === 'withdrawCompleted')[1];
+        .find(call => call[0] === 'withdrawCompleted')?.[1] as any;
 
       const mockEventData = {
         nullifier: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32],

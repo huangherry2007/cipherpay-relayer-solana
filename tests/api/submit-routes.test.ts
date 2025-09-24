@@ -23,7 +23,7 @@ describe('Submit Routes API', () => {
 
   describe('POST /api/v1/submit/deposit', () => {
     it('should process a valid deposit request', async () => {
-      mockProofVerifier.verify.mockResolvedValue(true);
+      mockProofVerifier.verify.mockResolvedValue(true as any);
       mockSolanaRelayer.processShieldedDeposit.mockResolvedValue('deposit-tx-123');
 
       const requestBody = {
@@ -55,7 +55,7 @@ describe('Submit Routes API', () => {
     });
 
     it('should handle invalid proof', async () => {
-      mockProofVerifier.verify.mockRejectedValue(new Error('Invalid proof'));
+      mockProofVerifier.verify.mockRejectedValue(new Error('Invalid proof') as any);
 
       const requestBody = {
         proof: mockProofs.deposit.proof,
@@ -88,7 +88,7 @@ describe('Submit Routes API', () => {
 
   describe('POST /api/v1/submit/transfer', () => {
     it('should process a valid transfer request', async () => {
-      mockProofVerifier.verify.mockResolvedValue(true);
+      mockProofVerifier.verify.mockResolvedValue(true as any);
       mockSolanaRelayer.processShieldedTransfer.mockResolvedValue('transfer-tx-456');
 
       const requestBody = {
@@ -124,7 +124,7 @@ describe('Submit Routes API', () => {
 
   describe('POST /api/v1/submit/withdraw', () => {
     it('should process a valid withdraw request', async () => {
-      mockProofVerifier.verify.mockResolvedValue(true);
+      mockProofVerifier.verify.mockResolvedValue(true as any);
       mockSolanaRelayer.processShieldedWithdraw.mockResolvedValue('withdraw-tx-789');
 
       const requestBody = {

@@ -62,3 +62,12 @@ export const mockEventWatcher = {
   stop: jest.fn(),
   getRecentEvents: jest.fn().mockResolvedValue([]),
 };
+
+export const mockSolanaRelayer = {
+  processShieldedDeposit: jest.fn(),
+  processShieldedTransfer: jest.fn(),
+  processShieldedWithdraw: jest.fn(),
+  getTransactionStatus: jest.fn(),
+  getCurrentRoot: jest.fn(),
+  startEventListening: jest.fn(),
+};
