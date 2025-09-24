@@ -1,46 +1,16 @@
-version: '3.8'
-
+version: "3.9"
 services:
-  cipherpay-relayer-solana:
-    build: .
-    ports:
-      - "3000:3000"
-    environment:
-      - NODE_ENV=production
-      - PORT=3000
-      - SOLANA_RPC_URL=${SOLANA_RPC_URL:-https://api.mainnet-beta.solana.com}
-      - RELAYER_PRIVATE_KEY=${RELAYER_PRIVATE_KEY}
-      - CIPHERPAY_PROGRAM_ID=${CIPHERPAY_PROGRAM_ID}
-      - RELAYER_PROGRAM_ID=${RELAYER_PROGRAM_ID}
-    volumes:
-      - ./logs:/app/logs
+  db:
+    image: mysql:8.0
     restart: unless-stopped
-    healthcheck:
-      test: ["CMD", "node", "-e", "require('http').get('http://localhost:3000/health', (res) => { process.exit(res.statusCode === 200 ? 0 : 1) })"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 40s
-    networks:
-      - cipherpay-network
-
-  # Optional: Add a local Solana validator for testing
-  solana-validator:
-    image: solanalabs/solana:stable
     ports:
-      - "8899:8899"
-      - "8900:8900"
-    command: solana-test-validator --rpc-port 8899 --rpc-bind-address 0.0.0.0
+      - "3306:3306"
+    environment:
+      MYSQL_ROOT_PASSWORD: root
+      MYSQL_DATABASE: cipherpay
+      MYSQL_USER: cipherpay
+      MYSQL_PASSWORD: cipherpay
     volumes:
-      - solana-data:/root/.config/solana
-    networks:
-      - cipherpay-network
-    profiles:
-      - dev
-
-networks:
-  cipherpay-network:
-    driver: bridge
-
+      - dbdata:/var/lib/mysql
 volumes:
-  solana-data: 
+  dbdata:
