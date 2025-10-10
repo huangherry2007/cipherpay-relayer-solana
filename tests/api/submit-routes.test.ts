@@ -35,6 +35,8 @@ describe('Submit Routes API', () => {
         publicSignals: mockProofs.deposit.publicSignals,
         depositHash: 'a'.repeat(64),
         commitment: 'b'.repeat(64),
+        tokenMint: 'So11111111111111111111111111111111111111112',
+        amount: 1000000,
       };
 
       const response = await request(app)
@@ -50,12 +52,14 @@ describe('Submit Routes API', () => {
       });
 
       expect(mockProofVerifier.verify).toHaveBeenCalledWith('deposit', requestBody.proof, requestBody.publicSignals);
-      expect(mockSolanaRelayer.processShieldedDeposit).toHaveBeenCalledWith(
-        Buffer.from(requestBody.depositHash, 'hex'),
-        requestBody.proof,
-        requestBody.publicSignals,
-        Buffer.from(requestBody.commitment, 'hex')
-      );
+      expect(mockSolanaRelayer.processShieldedDeposit).toHaveBeenCalledWith({
+        mint: expect.any(Object),
+        amount: BigInt(requestBody.amount),
+        depositHash: Buffer.from(requestBody.depositHash, 'hex'),
+        commitment: Buffer.from(requestBody.commitment, 'hex'),
+        proof: requestBody.proof,
+        publicSignals: requestBody.publicSignals.map((s: string | number) => s.toString()),
+      });
     });
 
     it('should handle invalid proof', async () => {
@@ -66,6 +70,8 @@ describe('Submit Routes API', () => {
         publicSignals: mockProofs.deposit.publicSignals,
         depositHash: 'a'.repeat(64),
         commitment: 'b'.repeat(64),
+        tokenMint: 'So11111111111111111111111111111111111111112',
+        amount: 1000000,
       };
 
       const response = await request(app)
@@ -80,13 +86,13 @@ describe('Submit Routes API', () => {
       const requestBody = {
         proof: mockProofs.deposit.proof,
         publicSignals: mockProofs.deposit.publicSignals,
-        // Missing depositHash and commitment
+        // Missing tokenMint and amount
       };
 
       await request(app)
         .post('/api/v1/submit/deposit')
         .send(requestBody)
-        .expect(500);
+        .expect(400);
     });
   });
 

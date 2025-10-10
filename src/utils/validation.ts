@@ -54,8 +54,25 @@ export const withdrawRequestSchema = z.object({
 });
 
 // Validation functions
-export function validateDepositRequest(data: unknown) {
-  return depositRequestSchema.parse(data);
+export function validateDepositRequest(body: any) {
+  const { proof, publicSignals, depositHash, commitment, tokenMint, amount } = body ?? {};
+  if (!tokenMint) throw new ValidationError("tokenMint is required");
+  if (amount === undefined || amount === null) throw new ValidationError("amount is required");
+  if (!proof || !publicSignals) throw new ValidationError("proof/publicSignals required");
+  if (!depositHash || !commitment) throw new ValidationError("depositHash/commitment required");
+
+  // Ensure hex shape (64 nibbles) for bindings
+  if (!/^[0-9a-fA-F]{64}$/.test(depositHash)) throw new ValidationError("depositHash must be 32-byte hex");
+  if (!/^[0-9a-fA-F]{64}$/.test(commitment)) throw new ValidationError("commitment must be 32-byte hex");
+
+  return {
+    proof,
+    publicSignals,
+    depositHash,
+    commitment,
+    tokenMint,
+    amount: amount.toString(),
+  };
 }
 
 export function validateTransferRequest(data: unknown) {

@@ -4,23 +4,27 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "tsx watch src/index.ts",
-    "build": "tsc -p tsconfig.json",
-    "start": "node dist/index.js",
-    "migrate": "tsx scripts/migrate.ts",
     "copy-keys": "node scripts/copy-verification-keys.js",
     "init-tree": "node scripts/init-canonical-tree.js",
+    "build": "tsc -p tsconfig.json && tsc-alias -p tsconfig.json",
+    "migrate": "tsx scripts/migrate.ts",
+    "dev": "tsx watch src/index.ts",
+    "start": "node dist/src/index.js",
     "test": "node --experimental-vm-modules node_modules/jest/bin/jest.js",
     "test:watch": "node --experimental-vm-modules node_modules/jest/bin/jest.js --watch",
-    "test:coverage": "node --experimental-vm-modules node_modules/jest/bin/jest.js --coverage"
+    "test:coverage": "node --experimental-vm-modules node_modules/jest/bin/jest.js --coverage",
+    "test:mysql": "node --experimental-vm-modules node_modules/jest/bin/jest.js tests/merkle/mysql-merkle-store.test.ts",
+    "test:e2e:deposit": "vitest run tests/e2e/deposit/deposit.test.ts"
   },
   "dependencies": {
-    "@coral-xyz/anchor": "^0.29.0",
+    "@coral-xyz/anchor": "^0.31.1",
+    "@solana/spl-memo": "^0.2.5",
+    "@solana/spl-token": "^0.4.14",
     "@solana/web3.js": "^1.95.1",
     "@types/uuid": "^10.0.0",
     "bcrypt": "^5.1.1",
     "big-integer": "^1.6.52",
-    "circomlibjs": "^0.0.8",
+    "circomlibjs": "^0.1.7",
     "commander": "^12.1.0",
     "cors": "^2.8.5",
     "dotenv": "^16.4.5",
@@ -30,7 +34,6 @@
     "morgan": "^1.10.1",
     "mysql2": "^3.10.2",
     "pino": "^9.3.2",
-    "snarkjs": "^0.7.5",
     "uuid": "^13.0.0",
     "zod": "^3.23.8"
   },
@@ -45,10 +48,14 @@
     "@types/node": "^22.7.4",
     "@types/supertest": "^6.0.2",
     "jest": "^29.7.0",
+    "snarkjs": "^0.7.5",
     "supertest": "^7.0.0",
     "ts-jest": "^29.4.4",
     "ts-node": "^10.9.2",
     "ts-node-dev": "^2.0.0",
-    "typescript": "^5.5.4"
+    "tsc-alias": "^1.8.16",
+    "tsx": "^4.20.6",
+    "typescript": "^5.5.4",
+    "vitest": "^3.2.4"
   }
 }

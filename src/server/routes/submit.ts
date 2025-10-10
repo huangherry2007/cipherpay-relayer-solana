@@ -16,50 +16,36 @@ import {
 export function submitRouter(verifier: ProofVerifier, relayer: SolanaRelayer) {
   const r = Router();
 
+  // src/server/routes/submit.ts (use tokenMint/amount and call relayer with object args)
   r.post("/deposit", async (req, res, next) => {
     try {
-      // Validate request data
-      const validatedData = validateDepositRequest(req.body);
-      const { proof, publicSignals, depositHash, commitment } = validatedData;
-      
-      // Convert publicSignals to the expected type
-      const signals = publicSignals.map((s: string | number) => typeof s === 'number' ? s.toString() : s);
-      
-      // Verify the proof
-      try {
-        await verifier.verify("deposit", proof, signals);
-      } catch (error) {
-        return res.status(400).json({
-          ok: false,
-          error: 'ProofVerificationError',
-          message: `Proof verification failed: ${error}`,
-          circuit: 'deposit'
-        });
-      }
-      
-      // Process the shielded deposit through Solana
+      const validated = validateDepositRequest(req.body);
+      const { proof, publicSignals, depositHash, commitment, tokenMint, amount } = validated;
+
+      const signals = publicSignals.map((s: string | number) => s.toString());
+      await verifier.verify("deposit", proof, signals);
+
       let txSignature: string;
       try {
-        txSignature = await relayer.processShieldedDeposit(
-          Buffer.from(depositHash, 'hex'),
+        txSignature = await relayer.processShieldedDeposit({
+          mint: new PublicKey(tokenMint),
+          amount: BigInt(amount),                         // base units
+          depositHash: Buffer.from(depositHash, "hex"),
+          commitment:  Buffer.from(commitment,  "hex"),
           proof,
-          signals,
-          Buffer.from(commitment, 'hex')
-        );
+          publicSignals: signals,
+        });
       } catch (error) {
-        throw new SolanaTransactionError(`Solana transaction failed: ${error}`);
+        const msg = (error instanceof Error && error.message) ? error.message : String(error);
+        throw new SolanaTransactionError(`Solana transaction failed: ${msg}`);
       }
-      
-      return res.json({ 
-        ok: true, 
-        accepted: true, 
-        txSignature,
-        message: "Deposit processed successfully"
-      });
+
+      return res.json({ ok: true, accepted: true, txSignature, message: "Deposit processed successfully" });
     } catch (e) {
       next(e);
     }
   });
+
 
   r.post("/transfer", async (req, res, next) => {
     try {
@@ -93,7 +79,8 @@ export function submitRouter(verifier: ProofVerifier, relayer: SolanaRelayer) {
           Buffer.from(out2Commitment, 'hex')
         );
       } catch (error) {
-        throw new SolanaTransactionError(`Solana transaction failed: ${error}`);
+        const msg = (error instanceof Error && error.message) ? error.message : String(error);
+        throw new SolanaTransactionError(`Solana transaction failed: ${msg}`);
       }
       
       return res.json({ 
@@ -140,7 +127,8 @@ export function submitRouter(verifier: ProofVerifier, relayer: SolanaRelayer) {
           new PublicKey(mint)
         );
       } catch (error) {
-        throw new SolanaTransactionError(`Solana transaction failed: ${error}`);
+        const msg = (error instanceof Error && error.message) ? error.message : String(error);
+        throw new SolanaTransactionError(`Solana transaction failed: ${msg}`);
       }
       
       return res.json({ 
@@ -173,7 +161,6 @@ export function submitRouter(verifier: ProofVerifier, relayer: SolanaRelayer) {
       next(e);
     }
   });
-
 
   // Add error handling middleware
   r.use(handleApiError);

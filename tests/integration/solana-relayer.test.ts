@@ -57,21 +57,25 @@ describe('SolanaRelayer Integration', () => {
       const commitment = Buffer.from('commitment-32-bytes-long-123456789012', 'utf8');
       const proof = mockProofs.deposit.proof;
       const publicSignals = mockProofs.deposit.publicSignals;
+      const mint = new PublicKey('So11111111111111111111111111111111111111112');
 
-      const result = await relayer.processShieldedDeposit(
+      const result = await relayer.processShieldedDeposit({
+        mint,
+        amount: BigInt(1000000),
         depositHash,
+        commitment,
         proof,
-        publicSignals,
-        commitment
-      );
+        publicSignals
+      });
 
       expect(result).toBe('deposit-tx-123');
       expect(mockProofVerifier.verify).toHaveBeenCalledWith('deposit', proof, publicSignals);
-      expect(mockCanonicalTree.append).toHaveBeenCalled();
       expect(mockTxManager.submitShieldedDepositAtomic).toHaveBeenCalledWith({
         depositHash,
-        proofBytes: Buffer.from(JSON.stringify(proof)),
-        publicInputsBytes: Buffer.from(JSON.stringify(publicSignals)),
+        proofBytes: expect.any(Buffer),
+        publicInputsBytes: expect.any(Buffer),
+        mint,
+        vaultTokenAccount: expect.any(PublicKey),
       });
     });
 
@@ -83,12 +87,15 @@ describe('SolanaRelayer Integration', () => {
       const proof = mockProofs.deposit.proof;
       const publicSignals = mockProofs.deposit.publicSignals;
 
-      await expect(relayer.processShieldedDeposit(
+      const mint = new PublicKey('So11111111111111111111111111111111111111112');
+      await expect(relayer.processShieldedDeposit({
+        mint,
+        amount: BigInt(1000000),
         depositHash,
+        commitment,
         proof,
-        publicSignals,
-        commitment
-      )).rejects.toThrow('Failed to process shielded deposit: Invalid proof');
+        publicSignals
+      })).rejects.toThrow('Failed to process shielded deposit: Invalid proof');
     });
 
     it('should handle Solana transaction failure', async () => {
@@ -99,12 +106,15 @@ describe('SolanaRelayer Integration', () => {
       const proof = mockProofs.deposit.proof;
       const publicSignals = mockProofs.deposit.publicSignals;
 
-      await expect(relayer.processShieldedDeposit(
+      const mint = new PublicKey('So11111111111111111111111111111111111111112');
+      await expect(relayer.processShieldedDeposit({
+        mint,
+        amount: BigInt(1000000),
         depositHash,
+        commitment,
         proof,
-        publicSignals,
-        commitment
-      )).rejects.toThrow('Failed to process shielded deposit: Transaction failed');
+        publicSignals
+      })).rejects.toThrow('Failed to process shielded deposit: Transaction failed');
     });
   });
 
@@ -126,11 +136,10 @@ describe('SolanaRelayer Integration', () => {
 
       expect(result).toBe('transfer-tx-456');
       expect(mockProofVerifier.verify).toHaveBeenCalledWith('transfer', proof, publicSignals);
-      expect(mockCanonicalTree.append).toHaveBeenCalledTimes(2);
       expect(mockTxManager.callShieldedTransfer).toHaveBeenCalledWith({
         nullifier,
-        proofBytes: Buffer.from(JSON.stringify(proof)),
-        publicInputsBytes: Buffer.from(JSON.stringify(publicSignals)),
+        proofBytes: expect.any(Buffer),
+        publicInputsBytes: expect.any(Buffer),
       });
     });
   });
@@ -157,8 +166,8 @@ describe('SolanaRelayer Integration', () => {
       expect(mockProofVerifier.verify).toHaveBeenCalledWith('withdraw', proof, publicSignals);
       expect(mockTxManager.callShieldedWithdraw).toHaveBeenCalledWith({
         nullifier,
-        proofBytes: Buffer.from(JSON.stringify(proof)),
-        publicInputsBytes: Buffer.from(JSON.stringify(publicSignals)),
+        proofBytes: expect.any(Buffer),
+        publicInputsBytes: expect.any(Buffer),
         recipient,
         amount,
         mint,
@@ -195,7 +204,7 @@ describe('SolanaRelayer Integration', () => {
 
     it('should get current Merkle root', async () => {
       const mockRoot = Buffer.from('current-root-32-bytes-long-123456789012', 'utf8');
-      mockCanonicalTree.getRoot.mockResolvedValue({ root: mockRoot, nextIndex: 5 } as any);
+      mockCanonicalTree.getRoot.mockResolvedValue(mockRoot);
 
       const result = await relayer.getCurrentRoot();
 

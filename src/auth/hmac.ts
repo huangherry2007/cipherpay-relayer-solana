@@ -1,4 +1,13 @@
 import { NextFunction, Request, Response } from "express";
+
+// Extend Request interface to include user property
+declare global {
+  namespace Express {
+    interface Request {
+      user?: { sub: string; scope: string };
+    }
+  }
+}
 import crypto from "crypto";
 import { loadEnv } from "@/services/config/env.js";
 
