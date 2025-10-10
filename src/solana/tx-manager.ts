@@ -63,12 +63,12 @@ export interface ShieldedDepositArgs {
   mint: PublicKey;                 // token mint (use NATIVE_MINT for wSOL)
   amount: bigint | number | BN;    // lamports if mint == NATIVE_MINT
   vaultTokenAccount?: PublicKey;   // optional override
-  payer?: PublicKey;               // default: program's provider wallet
+  payer?: PublicKey;               // default: provider wallet
 }
 
 type AnchorCtx = {
   program: Program<any>;
-  provider: anchor.AnchorProvider;   // may differ from program.provider
+  provider: anchor.AnchorProvider;   // use THIS provider/connection
   connection: Connection;
 };
 
@@ -150,21 +150,20 @@ function packGroth16ProofBE(proof: ShieldedDepositArgs["proof"]): Buffer {
 ============================================================================ */
 export default class TxManager {
   private readonly program: Program<any>;
-  private readonly provider: anchor.AnchorProvider;   // **always** the program's provider
-  private readonly connection: Connection;            // matches provider's connection
+  private readonly provider: anchor.AnchorProvider;   // use ctx.provider
+  private readonly connection: Connection;            // use ctx.connection
   private readonly programId: PublicKey;
 
   constructor(ctx: AnchorCtx) {
-    const programProvider =
-      ((ctx.program as any)?.provider as anchor.AnchorProvider | undefined) ?? ctx.provider;
-
+    // IMPORTANT: stick to the caller’s provider/connection (e.g., devnet RPC),
+    // not program.provider which may be a local test-validator without Memo.
     this.program = ctx.program;
-    this.provider = programProvider;
-    this.connection = (programProvider as any)?.connection ?? ctx.connection;
+    this.provider = ctx.provider;
+    this.connection = ctx.connection;
     this.programId = this.program.programId;
   }
 
-  /** Prefund the *program provider’s* wallet (not a separate provider) with a big cushion. */
+  /** Prefund the provider’s wallet with a cushion. */
   private async ensurePayerFunds(minLamports = 60_000_000): Promise<void> {
     const payer = this.provider.wallet.publicKey;
     const bal = await this.connection.getBalance(payer, { commitment: "confirmed" });
@@ -194,55 +193,15 @@ export default class TxManager {
     });
   }
 
-  private async prepareTokenSide(
-    payer: PublicKey,
-    mint: PublicKey,
-    vaultOwnerPda: PublicKey,
-    amount: BN,
-    mintDecimals: number
-  ): Promise<{ preIxs: TransactionInstruction[]; payerAta: PublicKey; vaultAta: PublicKey }> {
-    const preIxs: TransactionInstruction[] = [];
+  private async accountExists(pubkey: PublicKey): Promise<boolean> {
+    const ai = await this.connection.getAccountInfo(pubkey, "confirmed");
+    return !!ai;
+  }
 
-    const payerAta = getAssociatedTokenAddressSync(
-      mint, payer, false, TOKEN_PROGRAM_ID, ASSOCIATED_TOKEN_PROGRAM_ID
-    );
-    const vaultAta = getAssociatedTokenAddressSync(
-      mint, vaultOwnerPda, true, TOKEN_PROGRAM_ID, ASSOCIATED_TOKEN_PROGRAM_ID
-    );
-
-    // 1) Idempotent ATA creations
-    preIxs.push(
-      createAssociatedTokenAccountIdempotentInstruction(
-        payer, payerAta, payer, mint, TOKEN_PROGRAM_ID, ASSOCIATED_TOKEN_PROGRAM_ID
-      ),
-      createAssociatedTokenAccountIdempotentInstruction(
-        payer, vaultAta, vaultOwnerPda, mint, TOKEN_PROGRAM_ID, ASSOCIATED_TOKEN_PROGRAM_ID
-      )
-    );
-
-    // 2) For WSOL: pre-credit payer's ATA with lamports, then sync
-    if (mint.equals(NATIVE_MINT) && amount.gt(new BN(0))) {
-      preIxs.push(
-        SystemProgram.transfer({ fromPubkey: payer, toPubkey: payerAta, lamports: Number(amount) }),
-        createSyncNativeInstruction(payerAta)
-      );
-    }
-
-    // 3) Required TransferChecked (payerATA -> vaultATA) for `amount`
-    if (amount.gt(new BN(0))) {
-      preIxs.push(
-        createTransferCheckedInstruction(
-          payerAta,
-          mint,
-          vaultAta,
-          payer,                     // authority
-          BigInt(amount.toString()), // amount as bigint
-          mintDecimals
-        )
-      );
-    }
-
-    return { preIxs, payerAta, vaultAta };
+  private async sendIxs(ixs: TransactionInstruction[]) {
+    if (ixs.length === 0) return;
+    const tx = new anchor.web3.Transaction().add(...ixs);
+    await this.provider.sendAndConfirm(tx, [], { commitment: "confirmed" });
   }
 
   private async maybeInitRootCacheIx(rootCachePda: PublicKey, payer: PublicKey) {
@@ -258,8 +217,56 @@ export default class TxManager {
       .instruction();
   }
 
+  /** Build setup ixs: create ATAs if missing, (for wSOL) wrap SOL, and init root_cache. */
+  private async buildSetupIxs(
+    payer: PublicKey,
+    mint: PublicKey,
+    vaultOwnerPda: PublicKey,
+    amount: BN,
+    rootCachePda: PublicKey
+  ): Promise<{ ixs: TransactionInstruction[]; payerAta: PublicKey; vaultAta: PublicKey }> {
+    const ixs: TransactionInstruction[] = [];
+
+    const payerAta = getAssociatedTokenAddressSync(
+      mint, payer, false, TOKEN_PROGRAM_ID, ASSOCIATED_TOKEN_PROGRAM_ID
+    );
+    const vaultAta = getAssociatedTokenAddressSync(
+      mint, vaultOwnerPda, true, TOKEN_PROGRAM_ID, ASSOCIATED_TOKEN_PROGRAM_ID
+    );
+
+    // Init root cache if missing (do this in setup tx)
+    const initRoot = await this.maybeInitRootCacheIx(rootCachePda, payer);
+    if (initRoot) ixs.push(initRoot);
+
+    // Create ATAs only if they don't exist to keep deposit tx tiny.
+    if (!(await this.accountExists(payerAta))) {
+      ixs.push(
+        createAssociatedTokenAccountIdempotentInstruction(
+          payer, payerAta, payer, mint, TOKEN_PROGRAM_ID, ASSOCIATED_TOKEN_PROGRAM_ID
+        )
+      );
+    }
+    if (!(await this.accountExists(vaultAta))) {
+      ixs.push(
+        createAssociatedTokenAccountIdempotentInstruction(
+          payer, vaultAta, vaultOwnerPda, mint, TOKEN_PROGRAM_ID, ASSOCIATED_TOKEN_PROGRAM_ID
+        )
+      );
+    }
+
+    // For WSOL: pre-credit payer's ATA with lamports, then sync.
+    if (mint.equals(NATIVE_MINT) && amount.gt(new BN(0))) {
+      ixs.push(
+        SystemProgram.transfer({ fromPubkey: payer, toPubkey: payerAta, lamports: Number(amount) }),
+        createSyncNativeInstruction(payerAta)
+      );
+    }
+
+    return { ixs, payerAta, vaultAta };
+  }
+
   async submitShieldedDepositAtomic(args: ShieldedDepositArgs): Promise<string> {
-    // Always use the program provider’s wallet by default
+    // Use the caller’s provider wallet by default
     const payer = args.payer ?? this.provider.wallet.publicKey;
 
     // Normalize deposit hash both as bytes (for program) and ASCII hex (for memo)
@@ -281,20 +288,35 @@ export default class TxManager {
 
     const mintDecimals = await this.getMintDecimals(args.mint);
 
-    // Token-side pre-ix (create ATAs, wrap WSOL, TransferChecked)
-    const { preIxs, payerAta, vaultAta } = await this.prepareTokenSide(
-      payer, args.mint, vaultOwnerPda, amountBN, mintDecimals
+    // -------- Stage A: SETUP TX --------
+    const { ixs: setupIxs, payerAta, vaultAta } = await this.buildSetupIxs(
+      payer, args.mint, vaultOwnerPda, amountBN, rootCachePda
     );
     const vaultTokenAccount = args.vaultTokenAccount ?? vaultAta;
 
-    // root_cache lazy init (only if missing)
-    const initRootIx = await this.maybeInitRootCacheIx(rootCachePda, payer);
-    if (initRootIx) preIxs.unshift(initRootIx);
+    await this.sendIxs(setupIxs); // ATA creates / wSOL wrap / root_cache init
+
+    // -------- Stage B: DEPOSIT TX (minimal) --------
+    const preIxs: TransactionInstruction[] = [];
+
+    // Required TransferChecked (payerATA -> vaultATA) for `amount`
+    if (amountBN.gt(new BN(0))) {
+      preIxs.push(
+        createTransferCheckedInstruction(
+          payerAta,
+          args.mint,
+          vaultTokenAccount,
+          payer,                     // authority
+          BigInt(amountBN.toString()),
+          mintDecimals
+        )
+      );
+    }
 
     // Memo with deposit hash **as lowercase hex string** (valid UTF-8)
     preIxs.push(this.memoIxUtf8(depositHashHex));
 
-    // Choose packing path
+    // Pack proof/publics
     let proofPacked: Buffer;
     let inputsPacked: Buffer;
     if (args.proofBytes && args.publicInputsBytes) {
@@ -340,12 +362,12 @@ export default class TxManager {
     } catch (e: any) {
       const m = String(e?.message ?? "");
       if (m.includes("insufficient lamports") || m.includes("custom program error: 0x1")) {
-        await this.ensurePayerFunds(minNeeded + 80_000_000);
+        await this.ensurePayerFunds(minLamportsBump(minNeeded));
         return await run();
       }
       if (m.includes("Simulation failed")) {
         throw wrapErr(
-          "Shielded deposit failed during token prep (requires: create ATAs → (wSOL) transfer+sync → TransferChecked → Memo, all before the program call)",
+          "Shielded deposit failed during token prep (requires: TransferChecked → Memo in the same tx as the program call; ATA creates, root_cache init, and wSOL wrap happen in a separate setup tx)",
           e
         );
       }
@@ -353,3 +375,5 @@ export default class TxManager {
     }
   }
 }
+
+function minLamportsBump(x: number) { return x + 80_000_000; }
