@@ -6,12 +6,12 @@ import path from "node:path";
 
 import { makeAuthMiddleware } from "@/auth/index.js";
 import { prepareRouter } from "@/server/routes/prepare.js";
-import { submitRouter } from "@/server/routes/submit.js";
+import { submit } from "@/server/routes/submit.js";
 import { CanonicalTree } from "@/services/merkle/canonical-tree.js";
 import { getPool } from "@/services/db/mysql.js";
 import { loadEnv, isDashboardAuthEnabled } from "@/services/config/env.js";
 import { ProofVerifier } from "@/zk/proof-verifier.js";
-import { SolanaRelayer } from "@/services/solana-relayer.js";
+import { solanaRelayer } from "@/services/solana-relayer.js";
 import { protectDashboard } from "@/server/middleware/auth.js";
 
 import { createLoggingMiddleware } from "@/middleware/logging.js";
@@ -53,19 +53,12 @@ export async function makeServer() {
   const verifier = new ProofVerifier();
 
   // --- Solana relayer ---
-  const solanaRelayer = await SolanaRelayer.create(
-    {
-      solanaRpcUrl: env.solanaRpcUrl || "https://api.devnet.solana.com",
-      programId: env.programId,
-      vkeyDir,
-    },
-    verifier,
-    tree
-  );
+  // Using singleton solanaRelayer instance
 
-  solanaRelayer.startEventListening((event) => {
-    logger.solana.info({ event }, "Solana event received");
-  });
+  // TODO: Add event listening methods to SolanaRelayer
+  // solanaRelayer.startEventListening((event: any) => {
+  //   logger.solana.info({ event }, "Solana event received");
+  // });
 
   // --- monitoring & dashboard auth ---
   const DASHBOARD_AUTH_ENABLED = isDashboardAuthEnabled();
@@ -87,7 +80,7 @@ export async function makeServer() {
   // protected business APIs
   app.use(makeAuthMiddleware());
   app.use("/api/v1/prepare", prepareRouter(tree));
-  app.use("/api/v1/submit", submitRouter(verifier, solanaRelayer));
+  app.use("/api/v1/submit", submit);
 
   monitoringService.start(30_000);
 

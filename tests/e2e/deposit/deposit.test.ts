@@ -6,6 +6,7 @@ import crypto from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { H } from "@/services/merkle/poseidon.js";
 import dotenv from "dotenv";
+import util from "node:util";
 
 dotenv.config();
 
@@ -244,7 +245,9 @@ describe("E2E: deposit strict-sync flow", () => {
       memo: example.memo ?? 0,
     };
 
-    console.log("submitBody", submitBody);
+    console.log(
+      util.inspect(submitBody, { depth: null, maxArrayLength: null, colors: true })
+    );
 
     // If no proof artifacts and your server *requires* proof, we skip the submit step.
     if (!proof) {
