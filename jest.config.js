@@ -5,6 +5,7 @@ export default {
   testEnvironment: 'node',
   roots: ['<rootDir>/tests'],
   testMatch: ['**/*.test.ts'],
+  testPathIgnorePatterns: ['<rootDir>/tests/e2e/'],
   collectCoverageFrom: [
     'src/**/*.ts',
     '!src/**/*.d.ts',

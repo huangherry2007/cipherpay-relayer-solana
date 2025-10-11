@@ -3,7 +3,8 @@ import mysql, { Pool } from "mysql2/promise";
 import { loadEnv } from "@/services/config/env.js";
 
 let _pool: Pool | null = null;
-export async function getPool() {
+
+export async function getPool(): Promise<Pool> {
   if (_pool) return _pool;
   const env = loadEnv();
   _pool = mysql.createPool({
@@ -12,7 +13,30 @@ export async function getPool() {
     user: env.mysql.user,
     password: env.mysql.password,
     database: env.mysql.database,
-    connectionLimit: 8,
+    connectionLimit: 10,
+    waitForConnections: true,
+    enableKeepAlive: true,
+    namedPlaceholders: true,
+    supportBigNumbers: true,
   });
+  // Warm up the pool (fail fast if misconfigured)
+  try {
+    await _pool.query("SELECT 1");
+  } catch (e) {
+    // ensure we don't leave a broken pool around
+    try { await _pool.end(); } catch {}
+    _pool = null;
+    throw e;
+  }
   return _pool;
+}
+
+export async function closePool(): Promise<void> {
+  if (_pool) {
+    try {
+      await _pool.end();
+    } finally {
+      _pool = null;
+    }
+  }
 }

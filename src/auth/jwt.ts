@@ -1,3 +1,4 @@
+// src/auth/jwt.ts
 import { NextFunction, Request, Response } from "express";
 import { createRemoteJWKSet, jwtVerify, importSPKI } from "jose";
 import { loadEnv } from "@/services/config/env.js";
@@ -7,7 +8,7 @@ let publicKey: any | null = null;
 
 export function jwtAuth() {
   const env = loadEnv();
-  const { issuer, audience, jwksUrl, publicPem } = env.jwt;
+  const { issuer, audience, jwksUrl, publicPem, hs256Secret } = env.jwt || ({} as any);
 
   return async (req: Request, res: Response, next: NextFunction) => {
     try {
@@ -15,16 +16,28 @@ export function jwtAuth() {
       const token = auth.startsWith("Bearer ") ? auth.slice(7) : "";
       if (!token) return res.status(401).json({ error: "missing_bearer_token" });
 
-      if (jwksUrl && !jwks) jwks = createRemoteJWKSet(new URL(jwksUrl));
-      if (publicPem && !publicKey) publicKey = await importSPKI(publicPem, "RS256");
+      let key: any = null;
 
-      const verifyKey = jwks ?? publicKey;
-      const { payload } = await jwtVerify(token, verifyKey, {
+      if (jwksUrl) {
+        if (!jwks) jwks = createRemoteJWKSet(new URL(jwksUrl));
+        key = jwks;
+      } else if (publicPem) {
+        if (!publicKey) publicKey = await importSPKI(publicPem, "RS256");
+        key = publicKey;
+      } else if (hs256Secret) {
+        // HS256 shared secret
+        key = new TextEncoder().encode(hs256Secret);
+      } else {
+        // Nothing configured for JWT
+        return res.status(401).json({ error: "jwt_not_configured" });
+      }
+
+      const { payload } = await jwtVerify(token, key, {
         issuer: issuer || undefined,
         audience: audience || undefined,
       });
 
-      req.user = payload as any;
+      (req as any).user = payload;
       next();
     } catch {
       res.status(401).json({ error: "invalid_token" });

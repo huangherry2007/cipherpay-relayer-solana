@@ -3,6 +3,17 @@
 
 Headless relayer for the **CipherPay protocol** on Solana.
 
+Sync with other projects
+1) update program id
+2) copy idl file from cipherpay-anchor/build/{deposit,transfer,withdraw}/verification_key.json
+    node scripts/copy-verification-keys.js
+3) copy *_vkey.json from cipherpay-circuits
+4) npm run build
+5) start database - docker compose up -d db
+6) npm run dev
+
+
+
 ---
 
 ## Overview

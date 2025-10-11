@@ -1,4 +1,4 @@
 // src/solana/index.ts
-export { SolanaProgram } from "./program.ts";
-export { TxManager, type ShieldedDepositArgs, type ShieldedTransferArgs, type ShieldedWithdrawArgs } from "./tx-manager.ts";
-export { EventWatcher, type SolanaEvent, type DepositCompletedEvent, type TransferCompletedEvent, type WithdrawCompletedEvent } from "./event-watcher.ts";
+export { SolanaProgram } from "./program.js";
+export { default as TxManager } from "./tx-manager.js";
+export { EventWatcher, type SolanaEvent} from "./event-watcher.js";

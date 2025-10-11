@@ -1,9 +1,19 @@
-import { Request, Response } from 'express';
-import { metrics, appMetrics } from './metrics.js';
-import { getHealthStatus, HealthCheckStatus } from './health.js';
-import { logger } from '@/utils/logger.js';
+// src/monitoring/dashboard.ts
+import { Request, Response } from "express";
+import { metrics, appMetrics } from "./metrics.js";
+import { getHealthStatus, HealthCheckStatus } from "./health.js";
+import { logger } from "@/utils/logger.js";
 
-// Dashboard data interface
+/* ============ Config (env) ============ */
+const SUCCESS_RATE_THRESHOLD = Number(process.env.SUCCESS_RATE_THRESHOLD ?? 90); // %
+const MIN_TX_SAMPLES = Number(process.env.MIN_TX_SAMPLES ?? 10);                 // tx count
+const ERROR_RATE_THRESHOLD = Number(process.env.ERROR_RATE_THRESHOLD ?? 10);     // %
+const SLOW_RESPONSE_THRESHOLD_MS = Number(process.env.SLOW_RESPONSE_THRESHOLD_MS ?? 5000);
+const HIGH_HEAP_USED_MB = Number(process.env.HIGH_HEAP_USED_MB ?? 500);
+const MONITOR_INTERVAL_MS = Number(process.env.MONITOR_INTERVAL_MS ?? 30_000);
+const ALERT_COOLDOWN_MS = Number(process.env.ALERT_COOLDOWN_MS ?? 60_000);
+
+/* ============ Types ============ */
 export interface DashboardData {
   timestamp: number;
   health: any;
@@ -12,7 +22,7 @@ export interface DashboardData {
       totalRequests: number;
       requestsPerSecond: number;
       averageResponseTime: number;
-      errorRate: number;
+      errorRate: number; // %
     };
     database: {
       totalQueries: number;
@@ -25,8 +35,9 @@ export interface DashboardData {
     };
     solana: {
       totalTransactions: number;
+      txPerSecond: number;
       averageTransactionTime: number;
-      successRate: number;
+      successRate: number; // %
     };
     system: {
       memoryUsage: {
@@ -41,29 +52,33 @@ export interface DashboardData {
   };
 }
 
-// Get dashboard data
+/* ============ Rate computer (delta-based) ============ */
+// Simple module-level snapshot for delta computation between polling intervals.
+let lastSnapshot = {
+  t: 0,
+  httpTotal: 0,
+  solanaTotal: 0,
+};
+
+function computeRate(currentTotal: number, previousTotal: number, msDelta: number): number {
+  if (msDelta <= 0) return 0;
+  const diff = Math.max(0, currentTotal - previousTotal);
+  return diff / (msDelta / 1000);
+}
+
+/* ============ Core builders ============ */
 export async function getDashboardData(): Promise<DashboardData> {
   const timestamp = Date.now();
-  
+
   try {
-    // Get health status
     const health = await getHealthStatus();
-    
-    // Get all metrics
     const allMetrics = metrics.getAllMetrics();
-    
-    // Calculate HTTP metrics
-    const httpMetrics = calculateHttpMetrics(allMetrics);
-    
-    // Calculate database metrics
+
+    const httpMetrics = calculateHttpMetrics(allMetrics, timestamp);
     const dbMetrics = calculateDatabaseMetrics(allMetrics);
-    
-    // Calculate Solana metrics
-    const solanaMetrics = calculateSolanaMetrics(allMetrics);
-    
-    // Calculate system metrics
+    const solanaMetrics = calculateSolanaMetrics(allMetrics, timestamp);
     const systemMetrics = calculateSystemMetrics();
-    
+
     return {
       timestamp,
       health,
@@ -75,154 +90,147 @@ export async function getDashboardData(): Promise<DashboardData> {
       },
     };
   } catch (error) {
-    logger.error.error({ err: error }, 'Failed to get dashboard data');
+    logger.app.error({ err: error }, "Failed to get dashboard data");
     throw error;
   }
 }
 
-// Calculate HTTP metrics
-function calculateHttpMetrics(allMetrics: any[]): any {
-  const httpRequests = allMetrics.filter(m => m.name.startsWith('http_requests_total'));
-  const httpDurations = allMetrics.filter(m => m.name.startsWith('http_request_duration_ms'));
-  
-  const totalRequests = httpRequests.reduce((sum, m) => sum + m.value, 0);
-  const errorRequests = httpRequests
-    .filter(m => m.labels?.status && parseInt(m.labels.status) >= 400)
-    .reduce((sum, m) => sum + m.value, 0);
-  
+/* ============ Helpers ============ */
+function sumValues(metricsArr: any[], predicate: (m: any) => boolean): number {
+  return metricsArr.filter(predicate).reduce((sum, m) => sum + Number(m.value || 0), 0);
+}
+
+function avgOf(metricsArr: any[], predicate: (m: any) => boolean): number {
+  const vals = metricsArr.filter(predicate).map((m) => Number(m.value || 0));
+  if (vals.length === 0) return 0;
+  return vals.reduce((a, b) => a + b, 0) / vals.length;
+}
+
+/* ============ Calculators ============ */
+function calculateHttpMetrics(allMetrics: any[], now: number): DashboardData["metrics"]["http"] {
+  // Counters
+  const totalRequests = sumValues(allMetrics, (m) => m.name === "http_requests_total");
+  const errorRequests = sumValues(
+    allMetrics,
+    (m) => m.name === "http_requests_total" && m.labels?.status && Number(m.labels.status) >= 400
+  );
   const errorRate = totalRequests > 0 ? (errorRequests / totalRequests) * 100 : 0;
-  
-  // Calculate average response time from histogram
-  const durationStats = httpDurations.map(m => {
-    const stats = m.value; // Assuming this is histogram stats
-    return stats.avg || 0;
-  });
-  
-  const averageResponseTime = durationStats.length > 0 
-    ? durationStats.reduce((sum, avg) => sum + avg, 0) / durationStats.length 
-    : 0;
+
+  // Histogram avg (your registry emits *_avg)
+  const averageResponseTime = avgOf(
+    allMetrics,
+    (m) => m.name === "http_request_duration_ms_avg"
+  );
+
+  // RPS via delta
+  const dt = lastSnapshot.t ? now - lastSnapshot.t : 0;
+  const rps = computeRate(totalRequests, lastSnapshot.httpTotal, dt);
+
+  // Update snapshot
+  lastSnapshot.httpTotal = totalRequests;
+  lastSnapshot.t = now;
 
   return {
     totalRequests,
-    requestsPerSecond: 0, // Would need time-based calculation
+    requestsPerSecond: rps,
     averageResponseTime,
     errorRate,
   };
 }
 
-// Calculate database metrics
-function calculateDatabaseMetrics(allMetrics: any[]): any {
-  const dbQueries = allMetrics.filter(m => m.name.startsWith('db_queries_total'));
-  const dbDurations = allMetrics.filter(m => m.name.startsWith('db_query_duration_ms'));
-  
-  const totalQueries = dbQueries.reduce((sum, m) => sum + m.value, 0);
-  
-  const durationStats = dbDurations.map(m => {
-    const stats = m.value;
-    return stats.avg || 0;
-  });
-  
-  const averageQueryTime = durationStats.length > 0 
-    ? durationStats.reduce((sum, avg) => sum + avg, 0) / durationStats.length 
-    : 0;
+function calculateDatabaseMetrics(allMetrics: any[]): DashboardData["metrics"]["database"] {
+  const totalQueries = sumValues(allMetrics, (m) => m.name === "db_queries_total");
+  const averageQueryTime = avgOf(allMetrics, (m) => m.name === "db_query_duration_ms_avg");
 
   return {
     totalQueries,
     averageQueryTime,
     connectionPool: {
-      active: 0, // Would need to get from connection pool
+      active: 0, // TODO: wire from your DB pool
       idle: 0,
       total: 0,
     },
   };
 }
 
-// Calculate Solana metrics
-function calculateSolanaMetrics(allMetrics: any[]): any {
-  const solanaTxs = allMetrics.filter(m => m.name.startsWith('solana_transactions_total'));
-  const solanaDurations = allMetrics.filter(m => m.name.startsWith('solana_transaction_duration_ms'));
-  
-  const totalTransactions = solanaTxs.reduce((sum, m) => sum + m.value, 0);
-  const successfulTxs = solanaTxs
-    .filter(m => m.labels?.status === 'success')
-    .reduce((sum, m) => sum + m.value, 0);
-  
+function calculateSolanaMetrics(allMetrics: any[], now: number): DashboardData["metrics"]["solana"] {
+  const totalTransactions = sumValues(allMetrics, (m) => m.name === "solana_transactions_total");
+  const successfulTxs = sumValues(
+    allMetrics,
+    (m) => m.name === "solana_transactions_total" && m.labels?.status === "success"
+  );
   const successRate = totalTransactions > 0 ? (successfulTxs / totalTransactions) * 100 : 0;
-  
-  const durationStats = solanaDurations.map(m => {
-    const stats = m.value;
-    return stats.avg || 0;
-  });
-  
-  const averageTransactionTime = durationStats.length > 0 
-    ? durationStats.reduce((sum, avg) => sum + avg, 0) / durationStats.length 
-    : 0;
+
+  // Histogram avg
+  const averageTransactionTime = avgOf(
+    allMetrics,
+    (m) => m.name === "solana_transaction_duration_ms_avg"
+  );
+
+  // TPS via delta
+  const dt = lastSnapshot.t ? now - lastSnapshot.t : 0;
+  const tps = computeRate(totalTransactions, lastSnapshot.solanaTotal, dt);
+
+  // Update snapshot (note: http updated snapshot.t too; keep same timebase)
+  lastSnapshot.solanaTotal = totalTransactions;
 
   return {
     totalTransactions,
+    txPerSecond: tps,
     averageTransactionTime,
     successRate,
   };
 }
 
-// Calculate system metrics
-function calculateSystemMetrics(): any {
-  const memUsage = process.memoryUsage();
-  
+function calculateSystemMetrics(): DashboardData["metrics"]["system"] {
+  const mem = process.memoryUsage();
   return {
     memoryUsage: {
-      rss: Math.round(memUsage.rss / 1024 / 1024), // MB
-      heapTotal: Math.round(memUsage.heapTotal / 1024 / 1024),
-      heapUsed: Math.round(memUsage.heapUsed / 1024 / 1024),
-      external: Math.round(memUsage.external / 1024 / 1024),
+      rss: Math.round(mem.rss / 1024 / 1024),
+      heapTotal: Math.round(mem.heapTotal / 1024 / 1024),
+      heapUsed: Math.round(mem.heapUsed / 1024 / 1024),
+      external: Math.round((mem as any).external / 1024 / 1024),
     },
     uptime: process.uptime(),
-    cpuUsage: 0, // Would need additional library to measure CPU
+    cpuUsage: 0, // optional: wire pidusage/os.loadavg
   };
 }
 
-// Dashboard API endpoints
+/* ============ HTTP routes ============ */
 export function createDashboardRoutes() {
   return {
-    // Get full dashboard data
-    getDashboard: async (req: Request, res: Response) => {
+    getDashboard: async (_req: Request, res: Response) => {
       try {
         const data = await getDashboardData();
         res.json(data);
       } catch (error) {
-        logger.error.error({ err: error }, 'Dashboard data fetch failed');
-        res.status(500).json({ error: 'Failed to fetch dashboard data' });
+        logger.app.error({ err: error }, "Dashboard data fetch failed");
+        res.status(500).json({ error: "Failed to fetch dashboard data" });
       }
     },
 
-    // Get health status
-    getHealth: async (req: Request, res: Response) => {
+    getHealth: async (_req: Request, res: Response) => {
       try {
         const health = await getHealthStatus();
         const statusCode = health.status === HealthCheckStatus.HEALTHY ? 200 : 503;
         res.status(statusCode).json(health);
       } catch (error) {
-        logger.error.error({ err: error }, 'Health check failed');
-        res.status(503).json({ error: 'Health check failed' });
+        logger.app.error({ err: error }, "Health check failed");
+        res.status(503).json({ error: "Health check failed" });
       }
     },
 
-    // Get metrics
-    getMetrics: async (req: Request, res: Response) => {
+    getMetrics: async (_req: Request, res: Response) => {
       try {
         const allMetrics = metrics.getAllMetrics();
-        res.json({
-          timestamp: Date.now(),
-          metrics: allMetrics,
-        });
+        res.json({ timestamp: Date.now(), metrics: allMetrics });
       } catch (error) {
-        logger.error.error({ err: error }, 'Metrics fetch failed');
-        res.status(500).json({ error: 'Failed to fetch metrics' });
+        logger.app.error({ err: error }, "Metrics fetch failed");
+        res.status(500).json({ error: "Failed to fetch metrics" });
       }
     },
 
-    // Get system info
-    getSystemInfo: async (req: Request, res: Response) => {
+    getSystemInfo: async (_req: Request, res: Response) => {
       try {
         const systemMetrics = calculateSystemMetrics();
         res.json({
@@ -233,136 +241,130 @@ export function createDashboardRoutes() {
           arch: process.arch,
         });
       } catch (error) {
-        logger.error.error({ err: error }, 'System info fetch failed');
-        res.status(500).json({ error: 'Failed to fetch system info' });
+        logger.app.error({ err: error }, "System info fetch failed");
+        res.status(500).json({ error: "Failed to fetch system info" });
       }
     },
 
-    // Reset metrics
     resetMetrics: async (req: Request, res: Response) => {
       try {
         metrics.reset();
-        logger.app.info({ requestId: req.requestId }, 'Metrics reset requested');
-        res.json({ message: 'Metrics reset successfully' });
+        logger.app.info({ requestId: (req as any).requestId }, "Metrics reset requested");
+        // Reset snapshot too so rates don't spike
+        lastSnapshot = { t: 0, httpTotal: 0, solanaTotal: 0 };
+        res.json({ message: "Metrics reset successfully" });
       } catch (error) {
-        logger.error.error({ err: error }, 'Metrics reset failed');
-        res.status(500).json({ error: 'Failed to reset metrics' });
+        logger.app.error({ err: error }, "Metrics reset failed");
+        res.status(500).json({ error: "Failed to reset metrics" });
       }
     },
   };
 }
 
-// Alert conditions
+/* ============ Alerts ============ */
 export interface AlertCondition {
   name: string;
   condition: (data: DashboardData) => boolean;
-  severity: 'low' | 'medium' | 'high' | 'critical';
+  severity: "low" | "medium" | "high" | "critical";
   message: string;
 }
 
-// Predefined alert conditions
 export const alertConditions: AlertCondition[] = [
   {
-    name: 'high_error_rate',
-    condition: (data) => data.metrics.http.errorRate > 10,
-    severity: 'high',
-    message: 'High error rate detected',
+    name: "high_error_rate",
+    condition: (data) => data.metrics.http.errorRate > ERROR_RATE_THRESHOLD,
+    severity: "high",
+    message: "High error rate detected",
   },
   {
-    name: 'slow_response_time',
-    condition: (data) => data.metrics.http.averageResponseTime > 5000,
-    severity: 'medium',
-    message: 'Slow response times detected',
+    name: "slow_response_time",
+    condition: (data) => data.metrics.http.averageResponseTime > SLOW_RESPONSE_THRESHOLD_MS,
+    severity: "medium",
+    message: "Slow response times detected",
   },
   {
-    name: 'high_memory_usage',
-    condition: (data) => data.metrics.system.memoryUsage.heapUsed > 500,
-    severity: 'high',
-    message: 'High memory usage detected',
+    name: "high_memory_usage",
+    condition: (data) => data.metrics.system.memoryUsage.heapUsed > HIGH_HEAP_USED_MB,
+    severity: "high",
+    message: "High memory usage detected",
   },
   {
-    name: 'low_solana_success_rate',
-    condition: (data) => data.metrics.solana.successRate < 90,
-    severity: 'critical',
-    message: 'Low Solana transaction success rate',
+    name: "low_solana_success_rate",
+    condition: (data) =>
+      data.metrics.solana.totalTransactions >= MIN_TX_SAMPLES &&
+      data.metrics.solana.successRate < SUCCESS_RATE_THRESHOLD,
+    severity: "critical",
+    message: "Low Solana transaction success rate",
   },
   {
-    name: 'unhealthy_service',
-    condition: (data) => data.health.status !== 'healthy',
-    severity: 'critical',
-    message: 'Service is unhealthy',
+    name: "unhealthy_service",
+    condition: (data) => data.health.status !== "healthy",
+    severity: "critical",
+    message: "Service is unhealthy",
   },
 ];
 
-// Check alerts
-export function checkAlerts(data: DashboardData): Array<AlertCondition & { triggered: boolean }> {
-  return alertConditions.map(condition => ({
+export function checkAlerts(
+  data: DashboardData
+): Array<AlertCondition & { triggered: boolean }> {
+  return alertConditions.map((condition) => ({
     ...condition,
     triggered: condition.condition(data),
   }));
 }
 
-// Alert handler
+/* ============ Alert handler & service ============ */
 export class AlertHandler {
-  private alerts: Map<string, number> = new Map(); // Track last alert time
-  private cooldownMs: number = 60000; // 1 minute cooldown
+  private alerts: Map<string, number> = new Map(); // last alert time
+  private cooldownMs: number = ALERT_COOLDOWN_MS;
 
-  async handleAlert(alert: AlertCondition & { triggered: boolean }, data: DashboardData): Promise<void> {
+  async handleAlert(
+    alert: AlertCondition & { triggered: boolean },
+    data: DashboardData
+  ): Promise<void> {
     if (!alert.triggered) return;
 
     const now = Date.now();
     const lastAlert = this.alerts.get(alert.name);
-    
-    // Check cooldown
-    if (lastAlert && (now - lastAlert) < this.cooldownMs) {
-      return;
-    }
+    if (lastAlert && now - lastAlert < this.cooldownMs) return;
 
-    // Log alert
-    logger.error.error({
-      err: new Error(alert.message),
-      alert: alert.name,
-      severity: alert.severity,
-      data: {
-        http: data.metrics.http,
-        system: data.metrics.system,
-        health: data.health.status,
+    logger.app.error(
+      {
+        err: new Error(alert.message),
+        alert: alert.name,
+        severity: alert.severity,
+        data: {
+          http: data.metrics.http,
+          system: data.metrics.system,
+          health: data.health.status,
+        },
       },
-    }, `ALERT: ${alert.message}`);
+      `ALERT: ${alert.message}`
+    );
 
-    // Update last alert time
     this.alerts.set(alert.name, now);
-
-    // Here you would integrate with external alerting systems
-    // e.g., Slack, PagerDuty, email, etc.
     await this.sendAlert(alert, data);
   }
 
-  private async sendAlert(alert: AlertCondition & { triggered: boolean }, data: DashboardData): Promise<void> {
-    // Implement alert sending logic here
-    // This could integrate with:
-    // - Slack webhooks
-    // - PagerDuty API
-    // - Email services
-    // - SMS services
-    // - Custom webhook endpoints
-    
-    logger.app.info({
-      severity: alert.severity,
-      message: alert.message,
-    }, `Alert sent: ${alert.name}`);
+  private async sendAlert(
+    alert: AlertCondition & { triggered: boolean },
+    _data: DashboardData
+  ): Promise<void> {
+    // Integrate Slack/PagerDuty/etc. here
+    logger.app.info(
+      { severity: alert.severity, message: alert.message },
+      `Alert sent: ${alert.name}`
+    );
   }
 }
 
-// Create alert handler instance
 export const alertHandler = new AlertHandler();
 
-// Monitoring service
 export class MonitoringService {
   private intervalId: NodeJS.Timeout | null = null;
   private isRunning = false;
 
-  start(intervalMs: number = 30000): void {
+  start(intervalMs: number = MONITOR_INTERVAL_MS): void {
     if (this.isRunning) return;
 
     this.isRunning = true;
@@ -370,26 +372,22 @@ export class MonitoringService {
       try {
         const data = await getDashboardData();
         const alerts = checkAlerts(data);
-        
-        // Handle alerts
         for (const alert of alerts) {
           await alertHandler.handleAlert(alert, data);
         }
       } catch (error) {
-        logger.error.error({ err: error }, 'Monitoring service error');
+        logger.app.error({ err: error }, "Monitoring service error");
       }
     }, intervalMs);
 
-    logger.app.info({ intervalMs }, 'Monitoring service started');
+    logger.app.info({ intervalMs }, "Monitoring service started");
   }
 
   stop(): void {
-    if (this.intervalId) {
-      clearInterval(this.intervalId);
-      this.intervalId = null;
-    }
+    if (this.intervalId) clearInterval(this.intervalId);
+    this.intervalId = null;
     this.isRunning = false;
-    logger.app.info({}, 'Monitoring service stopped');
+    logger.app.info({}, "Monitoring service stopped");
   }
 
   isActive(): boolean {
@@ -397,7 +395,6 @@ export class MonitoringService {
   }
 }
 
-// Create monitoring service instance
 export const monitoringService = new MonitoringService();
 
 export default {

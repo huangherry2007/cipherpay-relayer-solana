@@ -9,6 +9,8 @@ export const mockConnection = {
   confirmTransaction: jest.fn(),
   getLatestBlockhash: jest.fn(),
   requestAirdrop: jest.fn(),
+  onLogs: jest.fn().mockResolvedValue(1),
+  removeOnLogsListener: jest.fn(),
 };
 
 export const mockProgram = {
@@ -27,7 +29,33 @@ export const mockProgram = {
       fetch: jest.fn(),
     },
   },
+  coder: {
+    events: {
+      decode: jest.fn(),
+    },
+  },
 };
+
+// Add accountsPartial method to the mock methods
+mockProgram.methods.shieldedDepositAtomic.mockReturnValue({
+  accountsPartial: jest.fn().mockReturnValue({
+    preInstructions: jest.fn().mockReturnValue({
+      rpc: jest.fn().mockResolvedValue('deposit-tx-123')
+    })
+  })
+});
+
+mockProgram.methods.shieldedTransfer.mockReturnValue({
+  accountsPartial: jest.fn().mockReturnValue({
+    rpc: jest.fn().mockResolvedValue('transfer-tx-456')
+  })
+});
+
+mockProgram.methods.shieldedWithdraw.mockReturnValue({
+  accountsPartial: jest.fn().mockReturnValue({
+    rpc: jest.fn().mockResolvedValue('withdraw-tx-789')
+  })
+});
 
 export const mockProvider = {
   connection: mockConnection,

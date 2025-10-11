@@ -12,33 +12,31 @@ describe('EventWatcher', () => {
   let eventWatcher: EventWatcher;
 
   beforeEach(() => {
-    eventWatcher = new EventWatcher(mockSolanaProgram as any);
+    const mockProgramHarness = {
+      programId: mockSolanaProgram.programId,
+      connection: mockSolanaProgram.connection,
+      program: mockSolanaProgram.program
+    };
+    eventWatcher = new EventWatcher(mockProgramHarness as any);
     jest.clearAllMocks();
   });
 
   describe('onAll', () => {
-    it('should register event listeners for all event types', () => {
+    it('should register event listeners for all event types', async () => {
       const mockCallback = jest.fn();
       
-      eventWatcher.onAll(mockCallback);
+      await eventWatcher.onAll(mockCallback);
 
-      expect(mockSolanaProgram.program.addEventListener).toHaveBeenCalledWith(
-        'depositCompleted',
-        expect.any(Function)
-      );
-      expect(mockSolanaProgram.program.addEventListener).toHaveBeenCalledWith(
-        'transferCompleted',
-        expect.any(Function)
-      );
-      expect(mockSolanaProgram.program.addEventListener).toHaveBeenCalledWith(
-        'withdrawCompleted',
-        expect.any(Function)
+      expect(mockSolanaProgram.connection.onLogs).toHaveBeenCalledWith(
+        mockSolanaProgram.programId,
+        expect.any(Function),
+        'confirmed'
       );
     });
 
-    it('should call callback with deposit event data', () => {
+    it('should register callback and call onLogs', async () => {
       const mockCallback = jest.fn();
-      eventWatcher.onAll(mockCallback);
+      await eventWatcher.onAll(mockCallback);
 
       // Get the deposit event listener
       const depositListener = mockSolanaProgram.program.addEventListener.mock.calls

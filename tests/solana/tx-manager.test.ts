@@ -23,7 +23,8 @@ describe('TxManager', () => {
     it('should submit a shielded deposit transaction', async () => {
       const mockTxSignature = 'mock-tx-signature-123';
       const mockMethods = {
-        accounts: jest.fn().mockReturnThis(),
+        accountsPartial: jest.fn().mockReturnThis(),
+        preInstructions: jest.fn().mockReturnThis(),
         rpc: jest.fn().mockResolvedValue(mockTxSignature) as any,
       } as any;
       mockSolanaProgram.program.methods.shieldedDepositAtomic.mockReturnValue(mockMethods);
@@ -32,24 +33,28 @@ describe('TxManager', () => {
         depositHash: Buffer.from('deposit-hash-32-bytes-long-123456789012', 'utf8'),
         proofBytes: Buffer.from('proof-bytes'),
         publicInputsBytes: Buffer.from('public-inputs'),
+        mint: new PublicKey('So11111111111111111111111111111111111111112'),
+        vaultTokenAccount: new PublicKey('11111111111111111111111111111112'),
       };
 
       const result = await txManager.submitShieldedDepositAtomic(args);
 
       expect(result).toBe(mockTxSignature);
       expect(mockSolanaProgram.program.methods.shieldedDepositAtomic).toHaveBeenCalledWith(
-        Array.from(args.depositHash),
-        Array.from(args.proofBytes),
-        Array.from(args.publicInputsBytes)
+        args.depositHash,
+        args.proofBytes,
+        args.publicInputsBytes
       );
-      expect(mockMethods.accounts).toHaveBeenCalled();
+      expect(mockMethods.accountsPartial).toHaveBeenCalled();
+      expect(mockMethods.preInstructions).toHaveBeenCalled();
       expect(mockMethods.rpc).toHaveBeenCalled();
     });
 
     it('should handle errors during deposit submission', async () => {
       const mockError = new Error('Transaction failed');
       const mockMethods = {
-        accounts: jest.fn().mockReturnThis(),
+        accountsPartial: jest.fn().mockReturnThis(),
+        preInstructions: jest.fn().mockReturnThis(),
         rpc: jest.fn().mockRejectedValue(mockError) as any,
       };
       mockSolanaProgram.program.methods.shieldedDepositAtomic.mockReturnValue(mockMethods);
@@ -58,6 +63,8 @@ describe('TxManager', () => {
         depositHash: Buffer.from('deposit-hash-32-bytes-long-123456789012', 'utf8'),
         proofBytes: Buffer.from('proof-bytes'),
         publicInputsBytes: Buffer.from('public-inputs'),
+        mint: new PublicKey('So11111111111111111111111111111111111111112'),
+        vaultTokenAccount: new PublicKey('11111111111111111111111111111112'),
       };
 
       await expect(txManager.submitShieldedDepositAtomic(args)).rejects.toThrow('Shielded deposit failed: Transaction failed');
@@ -68,7 +75,7 @@ describe('TxManager', () => {
     it('should submit a shielded transfer transaction', async () => {
       const mockTxSignature = 'mock-transfer-signature-456';
       const mockMethods = {
-        accounts: jest.fn().mockReturnThis(),
+        accountsPartial: jest.fn().mockReturnThis(),
         rpc: jest.fn().mockResolvedValue(mockTxSignature) as any,
       };
       mockSolanaProgram.program.methods.shieldedTransfer.mockReturnValue(mockMethods);
@@ -83,10 +90,12 @@ describe('TxManager', () => {
 
       expect(result).toBe(mockTxSignature);
       expect(mockSolanaProgram.program.methods.shieldedTransfer).toHaveBeenCalledWith(
-        Array.from(args.nullifier),
-        Array.from(args.proofBytes),
-        Array.from(args.publicInputsBytes)
+        args.nullifier,
+        args.proofBytes,
+        args.publicInputsBytes
       );
+      expect(mockMethods.accountsPartial).toHaveBeenCalled();
+      expect(mockMethods.rpc).toHaveBeenCalled();
     });
   });
 
@@ -94,7 +103,7 @@ describe('TxManager', () => {
     it('should submit a shielded withdraw transaction', async () => {
       const mockTxSignature = 'mock-withdraw-signature-789';
       const mockMethods = {
-        accounts: jest.fn().mockReturnThis(),
+        accountsPartial: jest.fn().mockReturnThis(),
         rpc: jest.fn().mockResolvedValue(mockTxSignature) as any,
       };
       mockSolanaProgram.program.methods.shieldedWithdraw.mockReturnValue(mockMethods);
@@ -114,10 +123,12 @@ describe('TxManager', () => {
 
       expect(result).toBe(mockTxSignature);
       expect(mockSolanaProgram.program.methods.shieldedWithdraw).toHaveBeenCalledWith(
-        Array.from(args.nullifier),
-        Array.from(args.proofBytes),
-        Array.from(args.publicInputsBytes)
+        args.nullifier,
+        args.proofBytes,
+        args.publicInputsBytes
       );
+      expect(mockMethods.accountsPartial).toHaveBeenCalled();
+      expect(mockMethods.rpc).toHaveBeenCalled();
     });
   });
 
