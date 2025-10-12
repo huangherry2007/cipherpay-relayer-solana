@@ -13,6 +13,8 @@ Sync with other projects
 5) npm run build
 6) start database 
     docker compose up -d db
+    npm run migrate    : Create tables and views by using src/db/migrations/001_init.sql
+    npm run init-tree  : Initialize all tables
 7) npm run dev
 
 
