@@ -4,7 +4,6 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "copy-keys": "node scripts/copy-verification-keys.js",
     "init-tree": "node scripts/init-canonical-tree.js",
     "build": "tsc -p tsconfig.json && tsc-alias -p tsconfig.json",
     "migrate": "tsx scripts/migrate.ts",
