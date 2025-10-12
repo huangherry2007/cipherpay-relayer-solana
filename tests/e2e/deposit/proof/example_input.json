@@ -1,0 +1,12 @@
+{
+    "ownerWalletPubKey": 0,
+    "ownerWalletPrivKey": 0,
+    "randomness": 0,
+    "tokenId": 0,
+    "memo": 0,
+    "inPathElements": null,
+    "inPathIndices": null,
+    "nextLeafIndex": null,
+    "nonce": 0,
+    "amount": 100
+}
