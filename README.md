@@ -16,7 +16,7 @@ Sync with other projects
     npm run migrate    : Create tables and views by using src/db/migrations/001_init.sql
     npm run init-tree  : Initialize all tables
 7) npm run dev
-
+8) npm run test:e2e:deposit
 
 
 ---

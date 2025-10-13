@@ -104,7 +104,18 @@ export async function makeServer() {
 
 export async function startServer() {
   const app = await makeServer();
-  return app.listen(env.port, () => {
+
+  // start HTTP server
+  const server = app.listen(env.port, () => {
     console.log(`listening on :${env.port}`);
   });
+
+  // ✅ start Solana event listeners AFTER server is up
+  try {
+    await solanaRelayer.startListeners();
+  } catch (e: any) {
+    console.error("[relayer] failed to start event listeners:", e?.message || e);
+  }
+
+  return server;
 }
