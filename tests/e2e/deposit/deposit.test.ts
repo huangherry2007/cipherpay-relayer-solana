@@ -231,8 +231,8 @@ describe("E2E: deposit strict-sync flow", () => {
     //
     // If your circuit exports "depositHash" and "newCommitment" in publicSignals,
     // you can fish them out here. Otherwise we fall back to example/commitment placeholders.
-    const depHashHex = BigInt(publicSignals[1]).toString(16).padStart(64, "0");  // per your circuit order
-    const commitmentHex = BigInt(publicSignals[2]).toString(16).padStart(64, "0");
+    const commitmentHex = BigInt(publicSignals[0]).toString(16).padStart(64, "0");
+    const depHashHex = BigInt(publicSignals[5]).toString(16).padStart(64, "0");  // per your circuit order
     
     const submitBody = {
       operation: "deposit",

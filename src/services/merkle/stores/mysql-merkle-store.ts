@@ -343,119 +343,108 @@ export class MySqlMerkleStore implements MerkleStore {
     return this.getPathByIndex(treeId, leafIndex);
   }
 
-  // -------- NEW: persist on-chain DepositCompleted ----------
-  async recordDepositCompleted(treeId: number, ev: DepositCompletedEvent): Promise<void> {
-    const conn = await this.pool.getConnection();
-    try {
-      await conn.beginTransaction();
+// Replace your method with this one
 
-      const depth = await this.getDepth(treeId);
+async recordDepositCompleted(treeId: number, ev: DepositCompletedEvent): Promise<void> {
+  const conn = await this.pool.getConnection();
+  try {
+    await conn.beginTransaction();
 
-      // Event emits: roots as BE32, commitment compatible with our LE32 pipeline.
-      const commitmentBig = le32ToBigInt(Buffer.from(ev.commitment));          // <-- LE32
-      const oldRootBig    = be32ToBigInt(Buffer.from(ev.old_merkle_root));     // <-- BE32
-      const newRootBig    = be32ToBigInt(Buffer.from(ev.new_merkle_root));     // <-- BE32
+    const depth = await this.getDepth(treeId);
 
+    // 1) Parse event -> numeric field elements
+    //    - roots in event are BE32 bytes
+    //    - commitment bytes from event are the same number; parse to bigint, we'll write BE to DB
+    const commitmentBig = le32ToBigInt(Buffer.from(ev.commitment));           // parse bytes to number (event gave LE)
+    const oldRootBig    = be32ToBigInt(Buffer.from(ev.old_merkle_root));      // event BE
+    const newRootBig    = be32ToBigInt(Buffer.from(ev.new_merkle_root));      // event BE
 
-      // on-chain value is post-increment; we insert at (next - 1)
-      const insertIndex = ev.next_leaf_index - 1;
-      if (insertIndex < 0) {
-        throw new Error(
-          `recordDepositCompleted: next_leaf_index=${ev.next_leaf_index} -> invalid insertIndex=${insertIndex}`
-        );
-      }
+    // post-increment in the event; we insert at (next - 1)
+    const insertIndex = ev.next_leaf_index - 1;
+    if (insertIndex < 0) throw new Error(`next_leaf_index=${ev.next_leaf_index} -> invalid`);
 
-      // --- Bootstrap heal (authoritative root = on-chain) ---
-      // If this is the first insert (index 0) and our DB root doesn't match
-      // the event's old root, align DB to the on-chain old root before writing.
-      const curRootBuf = await this.getRoot(treeId);           // LE32
-      const curRootBig = le32ToBigInt(curRootBuf);             // bigint
-      if (insertIndex === 0 && curRootBig !== oldRootBig) {
-        console.warn(`[merkle] aligning DB root to on-chain old_root (first insert at index 0)`, {
-          db_before_hex: curRootBuf.toString("hex"),
-          onchain_old_hex: Buffer.from(ev.old_merkle_root).toString("hex"),
-        });
-        await this.setRoot(treeId, oldRootBig); // store LE32 of the on-chain root
-      } else if (curRootBig !== oldRootBig) {
-        // Keep as warn-only for non-first inserts (could reveal a missed write)
-        const toHexLE = (b: bigint) => bigIntToLe32(b).toString("hex");
-        console.warn(`[merkle] DB root != on-chain old_root (tree=${treeId})`, {
-          db_hex: toHexLE(curRootBig),
-          onchain_old_hex: toHexLE(oldRootBig),
-        });
-      }
+    // 2) Sanity: compare current DB root (BE) with on-chain old root (BE)
+    const curRootBufBE = await this.getRoot(treeId);               // DB stores BE
+    const curRootBig   = be32ToBigInt(curRootBufBE);
+    if (curRootBig !== oldRootBig) {
+      const hexBE = (b: bigint) => bigIntToBe32(b).toString("hex");
+      console.warn(`[merkle] DB root != on-chain old_root (tree=${treeId})`, {
+        db_hex: hexBE(curRootBig),
+        onchain_old_hex: hexBE(oldRootBig),
+      });
+    }
 
-      // 1) Put leaf exactly at insertIndex
-      const leafBuf = bigIntToLe32(commitmentBig);
+    // 3) Put the leaf exactly at insertIndex — WRITE BE
+    const leafBufBE = bigIntToBe32(commitmentBig);
+    await conn.query(
+      `INSERT INTO leaves(tree_id, leaf_index, fe, fe_hex)
+       VALUES(?, ?, ?, ?)
+       ON DUPLICATE KEY UPDATE fe=VALUES(fe), fe_hex=VALUES(fe_hex)`,
+      [treeId, insertIndex, leafBufBE, feHex(leafBufBE)]
+    );
+
+    // 4) Recompute parents on the path — READ BE, WRITE BE
+    let idx = insertIndex;
+    let cur = commitmentBig;
+
+    for (let layer = 0; layer < depth; layer++) {
+      const isLeft   = (idx & 1) === 0;
+      const sibIndex = isLeft ? idx + 1 : idx - 1;
+
+      // sibling as BE from DB (or ZERO if missing)
+      const [sibRow] = await conn.query(
+        "SELECT fe FROM nodes_all WHERE tree_id=? AND node_layer=? AND node_index=?",
+        [treeId, layer, sibIndex]
+      );
+      const sibBufBE: Buffer | undefined = (sibRow as any[])[0]?.fe;
+      const sibBig = sibBufBE ? be32ToBigInt(sibBufBE) : (await zeros(layer))[0]!;
+
+      const left   = isLeft ? cur    : sibBig;
+      const right  = isLeft ? sibBig : cur;
+      const parent = await H2(left, right);
+
+      const nodeLayer = layer + 1;
+      const nodeIndex = Math.floor(idx / 2);
+      const parentBufBE = bigIntToBe32(parent);
+
       await conn.query(
-        `INSERT INTO leaves(tree_id, leaf_index, fe, fe_hex)
-        VALUES(?, ?, ?, ?)
-        ON DUPLICATE KEY UPDATE fe=VALUES(fe), fe_hex=VALUES(fe_hex)`,
-        [treeId, insertIndex, leafBuf, feHex(leafBuf)]
+        `INSERT INTO nodes(tree_id, node_layer, node_index, fe, fe_hex)
+         VALUES(?, ?, ?, ?, ?)
+         ON DUPLICATE KEY UPDATE fe=VALUES(fe), fe_hex=VALUES(fe_hex)`,
+        [treeId, nodeLayer, nodeIndex, parentBufBE, feHex(parentBufBE)]
       );
 
-      // 2) Recompute parents on path and store internal nodes
-      let idx = insertIndex;
-      let cur = commitmentBig;
-
-      for (let layer = 0; layer < depth; layer++) {
-        const isLeft   = (idx & 1) === 0;
-        const sibIndex = isLeft ? idx + 1 : idx - 1;
-
-        const [sibRow] = await conn.query(
-          "SELECT fe FROM nodes_all WHERE tree_id=? AND node_layer=? AND node_index=?",
-          [treeId, layer, sibIndex]
-        );
-        const sibBuf: Buffer | undefined = (sibRow as any[])[0]?.fe;
-        const sibBig = sibBuf ? le32ToBigInt(sibBuf) : (await zeros(layer))[0]!;
-
-        const left   = isLeft ? cur    : sibBig;
-        const right  = isLeft ? sibBig : cur;
-        const parent = await H2(left, right);
-
-        const nodeLayer = layer + 1;
-        const nodeIndex = Math.floor(idx / 2);
-        const parentBuf = bigIntToLe32(parent);
-
-        await conn.query(
-          `INSERT INTO nodes(tree_id, node_layer, node_index, fe, fe_hex)
-          VALUES(?, ?, ?, ?, ?)
-          ON DUPLICATE KEY UPDATE fe=VALUES(fe), fe_hex=VALUES(fe_hex)`,
-          [treeId, nodeLayer, nodeIndex, parentBuf, feHex(parentBuf)]
-        );
-
-        if (process.env.MERKLE_TRACE === "1") {
-          const hexLE = (b: bigint) => bigIntToLe32(b).toString("hex");
-          console.log(`[merkle:trace] layer=${layer} idx=${idx} isLeft=${isLeft} sibIndex=${sibIndex}`, {
-            left:   hexLE(left),
-            right:  hexLE(right),
-            parent: hexLE(parent),
-          });
-        }
-
-        cur = parent;
-        idx >>= 1;
-      }
-
-      // 3) Root: align DB with on-chain new root (warn if recompute disagrees)
-      if (cur !== newRootBig) {
-        const hexLE = (b: bigint) => bigIntToLe32(b).toString("hex");
-        console.warn("[merkle] recomputed root != on-chain new root", {
-          recomputed_hex: hexLE(cur),
-          onchain_new_hex: hexLE(newRootBig),
+      if (process.env.MERKLE_TRACE === "1") {
+        const hexBE = (b: bigint) => bigIntToBe32(b).toString("hex");
+        console.log(`[merkle:trace] layer=${layer} idx=${idx} isLeft=${isLeft} sibIndex=${sibIndex}`, {
+          left:   hexBE(left),
+          right:  hexBE(right),
+          parent: hexBE(parent),
         });
       }
-      await this.setRoot(treeId, newRootBig);
 
-      // 4) Advance next_index to match the on-chain post-increment value
-      await this.setNextIndex(treeId, insertIndex + 1);
-
-      await conn.commit();
-    } catch (e) {
-      try { await conn.rollback(); } catch {}
-      throw e;
-    } finally {
-      conn.release();
+      cur = parent;
+      idx >>= 1;
     }
+
+    // 5) Persist authoritative on-chain new root (BE). Warn if our recompute disagrees.
+    if (cur !== newRootBig) {
+      const hexBE = (b: bigint) => bigIntToBe32(b).toString("hex");
+      console.warn("[merkle] recomputed root != on-chain new root (continuing with on-chain root)", {
+        recomputed_hex: hexBE(cur),
+        onchain_new_hex: hexBE(newRootBig),
+      });
+    }
+    await this.setRoot(treeId, newRootBig);               // WRITE BE
+    await this.setNextIndex(treeId, ev.next_leaf_index);  // keep cursor aligned with program
+
+    await conn.commit();
+  } catch (e) {
+    try { await conn.rollback(); } catch {}
+    throw e;
+  } finally {
+    conn.release();
   }
+}
+
 }
