@@ -1,13 +1,9 @@
 // src/services/merkle/stores/mysql-merkle-store.ts
 import { Pool } from "mysql2/promise";
-import { bigIntToLe32, feHex, le32ToBigInt } from "@/utils/bytes.js";
+import { bigIntToLe32, feHex, le32ToBigInt, be32ToBigInt, bigIntToBe32 } from "@/utils/bytes.js";
 import { H2, zeros } from "@/services/merkle/poseidon.js";
 import dotenv from "dotenv";
 dotenv.config();
-
-const be32ToBigInt = (buf: Buffer): bigint => le32ToBigInt(Buffer.from(buf).reverse());
-const bigIntToBe32 = (x: bigint): Buffer => Buffer.from(bigIntToLe32(x)).reverse();
-
 
 export type DepositCompletedEvent = {
   deposit_hash: Uint8Array;
@@ -343,8 +339,7 @@ export class MySqlMerkleStore implements MerkleStore {
     return this.getPathByIndex(treeId, leafIndex);
   }
 
-// Replace your method with this one
-
+// -------- persist on-chain DepositCompleted (event roots are LE32) ----------
 async recordDepositCompleted(treeId: number, ev: DepositCompletedEvent): Promise<void> {
   const conn = await this.pool.getConnection();
   try {
@@ -353,28 +348,26 @@ async recordDepositCompleted(treeId: number, ev: DepositCompletedEvent): Promise
     const depth = await this.getDepth(treeId);
 
     // 1) Parse event -> numeric field elements
-    //    - roots in event are BE32 bytes
-    //    - commitment bytes from event are the same number; parse to bigint, we'll write BE to DB
-    const commitmentBig = le32ToBigInt(Buffer.from(ev.commitment));           // parse bytes to number (event gave LE)
-    const oldRootBig    = be32ToBigInt(Buffer.from(ev.old_merkle_root));      // event BE
-    const newRootBig    = be32ToBigInt(Buffer.from(ev.new_merkle_root));      // event BE
+    const commitmentBig = le32ToBigInt(Buffer.from(ev.commitment));           // commitment is LE32 in your pipeline
+    const oldRootBig    = le32ToBigInt(Buffer.from(ev.old_merkle_root));      // <-- LE32 from event
+    const newRootBig    = le32ToBigInt(Buffer.from(ev.new_merkle_root));      // <-- LE32 from event
 
     // post-increment in the event; we insert at (next - 1)
     const insertIndex = ev.next_leaf_index - 1;
     if (insertIndex < 0) throw new Error(`next_leaf_index=${ev.next_leaf_index} -> invalid`);
 
-    // 2) Sanity: compare current DB root (BE) with on-chain old root (BE)
+    // 2) Sanity: compare current DB root (BE on disk) with on-chain old root (LE in event)
     const curRootBufBE = await this.getRoot(treeId);               // DB stores BE
     const curRootBig   = be32ToBigInt(curRootBufBE);
     if (curRootBig !== oldRootBig) {
       const hexBE = (b: bigint) => bigIntToBe32(b).toString("hex");
       console.warn(`[merkle] DB root != on-chain old_root (tree=${treeId})`, {
         db_hex: hexBE(curRootBig),
-        onchain_old_hex: hexBE(oldRootBig),
+        onchain_old_hex: hexBE(oldRootBig), // show as BE for readability
       });
     }
 
-    // 3) Put the leaf exactly at insertIndex — WRITE BE
+    // 3) Put the leaf exactly at insertIndex — write BE to DB
     const leafBufBE = bigIntToBe32(commitmentBig);
     await conn.query(
       `INSERT INTO leaves(tree_id, leaf_index, fe, fe_hex)
@@ -383,24 +376,26 @@ async recordDepositCompleted(treeId: number, ev: DepositCompletedEvent): Promise
       [treeId, insertIndex, leafBufBE, feHex(leafBufBE)]
     );
 
-    // 4) Recompute parents on the path — READ BE, WRITE BE
+    // 4) Recompute parents on the path — read BE, write BE
     let idx = insertIndex;
     let cur = commitmentBig;
 
-    for (let layer = 0; layer < depth; layer++) {
-      const isLeft   = (idx & 1) === 0;
+    const loadSiblingBE = async (layer: number, idx: number, isLeft: boolean): Promise<bigint> => {
       const sibIndex = isLeft ? idx + 1 : idx - 1;
-
-      // sibling as BE from DB (or ZERO if missing)
-      const [sibRow] = await conn.query(
+      const [rows] = await conn.query(
         "SELECT fe FROM nodes_all WHERE tree_id=? AND node_layer=? AND node_index=?",
         [treeId, layer, sibIndex]
       );
-      const sibBufBE: Buffer | undefined = (sibRow as any[])[0]?.fe;
-      const sibBig = sibBufBE ? be32ToBigInt(sibBufBE) : (await zeros(layer))[0]!;
+      const buf: Buffer | undefined = (rows as any[])[0]?.fe;
+      return buf && buf.length === 32 ? be32ToBigInt(buf) : (await zeros(layer))[0]!;
+    };
 
-      const left   = isLeft ? cur    : sibBig;
-      const right  = isLeft ? sibBig : cur;
+    for (let layer = 0; layer < depth; layer++) {
+      const isLeft = (idx & 1) === 0;
+      const sib = await loadSiblingBE(layer, idx, isLeft);
+
+      const left  = isLeft ? cur : sib;
+      const right = isLeft ? sib : cur;
       const parent = await H2(left, right);
 
       const nodeLayer = layer + 1;
@@ -415,28 +410,41 @@ async recordDepositCompleted(treeId: number, ev: DepositCompletedEvent): Promise
       );
 
       if (process.env.MERKLE_TRACE === "1") {
-        const hexBE = (b: bigint) => bigIntToBe32(b).toString("hex");
-        console.log(`[merkle:trace] layer=${layer} idx=${idx} isLeft=${isLeft} sibIndex=${sibIndex}`, {
-          left:   hexBE(left),
-          right:  hexBE(right),
-          parent: hexBE(parent),
-        });
+        const toHexBE = (b: bigint) => bigIntToBe32(b).toString("hex");
+        console.log(
+          `[merkle:trace] layer=${layer} idx=${idx} isLeft=${isLeft} sibIndex=${isLeft ? idx + 1 : idx - 1} {`,
+          { left: toHexBE(left), right: toHexBE(right), parent: toHexBE(parent) },
+          `}`
+        );
       }
 
       cur = parent;
       idx >>= 1;
     }
 
-    // 5) Persist authoritative on-chain new root (BE). Warn if our recompute disagrees.
-    if (cur !== newRootBig) {
-      const hexBE = (b: bigint) => bigIntToBe32(b).toString("hex");
-      console.warn("[merkle] recomputed root != on-chain new root (continuing with on-chain root)", {
-        recomputed_hex: hexBE(cur),
-        onchain_new_hex: hexBE(newRootBig),
+    // 5) Robust comparison against on-chain new root (event bytes are LE)
+    const curBE   = bigIntToBe32(cur);                        // our recomputed root BE bytes
+    const curLE   = bigIntToLe32(cur);                        // our recomputed root LE bytes
+    const evNewLE = Buffer.from(ev.new_merkle_root);          // event raw (LE)
+    const evNewBE = Buffer.from(ev.new_merkle_root).reverse();// BE view of event
+
+    const eqByNumber = (cur === newRootBig);  // should now be true
+    const eqByBE     = curBE.equals(evNewBE);
+    const eqByLE     = curLE.equals(evNewLE);
+
+    if (!eqByNumber || !eqByBE || !eqByLE) {
+      console.warn("[merkle] new root equality (should all be true)", {
+        eqByNumber, eqByBE, eqByLE,
+        recomputed_hex_BE: curBE.toString("hex"),
+        recomputed_hex_LE: curLE.toString("hex"),
+        onchain_new_hex_BE: evNewBE.toString("hex"),
+        onchain_new_hex_LE: evNewLE.toString("hex"),
       });
     }
-    await this.setRoot(treeId, newRootBig);               // WRITE BE
-    await this.setNextIndex(treeId, ev.next_leaf_index);  // keep cursor aligned with program
+
+    // 6) Persist authoritative on-chain root/cursor (store BE on disk)
+    await this.setRoot(treeId, newRootBig);              // setRoot should encode with bigIntToBe32
+    await this.setNextIndex(treeId, ev.next_leaf_index);
 
     await conn.commit();
   } catch (e) {
@@ -447,4 +455,6 @@ async recordDepositCompleted(treeId: number, ev: DepositCompletedEvent): Promise
   }
 }
 
+
 }
+
