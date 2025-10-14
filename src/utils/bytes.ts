@@ -1,17 +1,44 @@
 // src/utils/bytes.ts
-export function bigIntToLe32(x: bigint): Buffer {
+/** Parse a 32-byte little-endian buffer to bigint */
+export function le32ToBigInt(buf: Buffer | Uint8Array): bigint {
+  let x = 0n;
+  const b = Buffer.from(buf);
+  for (let i = b.length - 1; i >= 0; i--) {
+    x = (x << 8n) | BigInt(b[i]);
+  }
+  return x;
+}
+
+/** Parse a 32-byte big-endian buffer to bigint */
+export function be32ToBigInt(buf: Buffer | Uint8Array): bigint {
+  let x = 0n;
+  const b = Buffer.from(buf);
+  for (let i = 0; i < b.length; i++) {
+    x = (x << 8n) | BigInt(b[i]);
+  }
+  return x;
+}
+
+/** Encode bigint to 32-byte little-endian buffer */
+export function bigIntToLe32(x0: bigint): Buffer {
+  let x = x0;
   const out = Buffer.alloc(32);
-  let v = x;
   for (let i = 0; i < 32; i++) {
-    out[i] = Number(v & 0xffn);
-    v >>= 8n;
+    out[i] = Number(x & 0xffn);
+    x >>= 8n;
   }
   return out;
 }
-export function le32ToBigInt(b: Buffer): bigint {
-  let x = 0n;
-  for (let i = 31; i >= 0; i--) x = (x << 8n) + BigInt(b[i] ?? 0);
-  return x;
+
+/** Encode bigint to 32-byte big-endian buffer */
+export function bigIntToBe32(x0: bigint): Buffer {
+  let x = x0;
+  const out = Buffer.alloc(32);
+  for (let i = 31; i >= 0; i--) {
+    out[i] = Number(x & 0xffn);
+    x >>= 8n;
+  }
+  return out;
 }
 export const feHex = (b: Buffer) => b.toString("hex");
 export const toBig = (x: string | number | bigint) =>

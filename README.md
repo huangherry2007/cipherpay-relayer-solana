@@ -5,13 +5,18 @@ Headless relayer for the **CipherPay protocol** on Solana.
 
 Sync with other projects
 1) update program id
-2) copy idl file from cipherpay-anchor/build/{deposit,transfer,withdraw}/verification_key.json
-    node scripts/copy-verification-keys.js
-3) copy *_vkey.json from cipherpay-circuits
-4) npm run build
-5) start database - docker compose up -d db
-6) npm run dev
-
+2) copy idl file from cipherpay-anchor/target/idl/cipherpay_anchor.json to cipherpay-relayer-solana/src/idl
+3) copy *_vkey.json from cipherpay-circuits/build/{deposit,transfer,withdraw}/verification_key.json to cipherpay-relayer-solana/src/zk/circuits and cipherpay-relayer-solana/tests/e2e/{deposit,transfer,withdraw}/proof
+    npm run copy-keys-to-relayer-and-anchor  under cipherpay-circuits
+4) copy *_final.zkey and *.wasm from cipherpay-circuits/build/{deposit,transfer,withdraw}/{deposit_js, transfer_js,withdraw_js}/ to cipherpay-relayer-solana/tests/e2e/{deposit,transfer,withdraw}/proof
+    npm run copy-proofs-artifacts-to-relayer under cipherpay-circuits
+5) npm run build
+6) start database 
+    docker compose up -d db
+    npm run migrate    : Create tables and views by using src/db/migrations/001_init.sql
+    npm run init-tree  : Initialize all tables
+7) npm run dev
+8) npm run test:e2e:deposit
 
 
 ---
