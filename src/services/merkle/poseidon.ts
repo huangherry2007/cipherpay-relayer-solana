@@ -64,21 +64,3 @@ export async function zeros(depth: number): Promise<bigint[]> {
   _zerosCache.set(depth, z);
   return z;
 }
-
-/** Recompute root from a single Merkle path (LE-encoded 32B buffers). */
-export async function computeRootFromProof(
-  leaf: Buffer,
-  pathElements: Buffer[],
-  pathIndices: number[],
-): Promise<Buffer> {
-  const { poseidon, F } = await loadCircomPoseidon();
-  let cur = le32ToBigInt(leaf);
-  for (let i = 0; i < pathElements.length; i++) {
-    const sib = le32ToBigInt(pathElements[i]);
-    cur =
-      pathIndices[i] === 0
-        ? (F.toObject(poseidon([cur, sib])) as bigint)
-        : (F.toObject(poseidon([sib, cur])) as bigint);
-  }
-  return bigIntToLe32(cur);
-}

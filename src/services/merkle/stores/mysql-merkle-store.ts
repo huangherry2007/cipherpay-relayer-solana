@@ -413,7 +413,7 @@ async recordDepositCompleted(treeId: number, ev: DepositCompletedEvent): Promise
         const toHexBE = (b: bigint) => bigIntToBe32(b).toString("hex");
         console.log(
           `[merkle:trace] layer=${layer} idx=${idx} isLeft=${isLeft} sibIndex=${isLeft ? idx + 1 : idx - 1} {`,
-          { left: toHexBE(left), right: toHexBE(right), parent: toHexBE(parent) },
+          { left: toHexBE(left), right: toHexBE(right), parent: toHexBE(parent), parent_decimal: parent.toString() },
           `}`
         );
       }
@@ -437,6 +437,16 @@ async recordDepositCompleted(treeId: number, ev: DepositCompletedEvent): Promise
         eqByNumber, eqByBE, eqByLE,
         recomputed_hex_BE: curBE.toString("hex"),
         recomputed_hex_LE: curLE.toString("hex"),
+        onchain_new_hex_BE: evNewBE.toString("hex"),
+        onchain_new_hex_LE: evNewLE.toString("hex"),
+      });
+    } else {
+      console.info("[merkle] new root equals on-chain new root (all are true)", {
+        eqByNumber, eqByBE, eqByLE,
+        recomputed_decimal: cur.toString(),
+        recomputed_hex_BE: curBE.toString("hex"),
+        recomputed_hex_LE: curLE.toString("hex"),
+        onchain_new_decimal: newRootBig.toString(),
         onchain_new_hex_BE: evNewBE.toString("hex"),
         onchain_new_hex_LE: evNewLE.toString("hex"),
       });
