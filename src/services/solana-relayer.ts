@@ -64,6 +64,13 @@ export type DepositBinArgs = {
   publicInputsBytes: Buffer; // 7*32 bytes
 };
 
+/** NEW: transfer args (9*32 public inputs) */
+export type TransferBinArgs = {
+  tokenMint: string;         // base58
+  proofBytes: Buffer;        // 256 bytes
+  publicInputsBytes: Buffer; // 9*32 bytes
+};
+
 type SubmitWithinOpts = {
   /** Max wall time for one attempt (ms). Default 25_000 */
   timeoutMs?: number;
@@ -280,6 +287,55 @@ class SolanaRelayer {
 
       return Promise.race([
         this.submitDepositWithBin(args),
+        to,
+      ]) as Promise<{ signature: string }>;
+    };
+
+    let lastErr: unknown = null;
+    for (let i = 1; i <= 1 + retries; i++) {
+      try {
+        return await attemptOnce(i);
+      } catch (e) {
+        lastErr = e;
+        if (i <= retries) await new Promise((r) => setTimeout(r, 500 * i));
+      }
+    }
+    throw lastErr instanceof Error ? lastErr : new Error(String(lastErr));
+  }
+
+  /** 🔹 NEW: submit a shielded transfer using raw proof/public input binaries. */
+  async submitTransferWithBin(args: TransferBinArgs) {
+    const mint = new web3.PublicKey(args.tokenMint);
+    // TxManager is expected to mirror the deposit path with a transfer variant.
+    // Name chosen to be parallel to submitShieldedDepositAtomicBytes.
+    const sig = await this.txm.submitShieldedTransferAtomicBytes({
+      mint,
+      proofBytes: args.proofBytes,
+      publicInputsBytes: args.publicInputsBytes, // 9*32
+    });
+    return { signature: sig };
+  }
+
+  /** 🔹 NEW: transfer with timeout/retries (optional helper). */
+  async submitTransferWithin(
+    args: TransferBinArgs,
+    opts: SubmitWithinOpts = {}
+  ): Promise<{ signature: string }> {
+    const timeoutMs = opts.timeoutMs ?? 25_000;
+    const retries = Math.max(0, opts.retries ?? 1);
+
+    const attemptOnce = async (attempt: number) => {
+      await opts.onAttempt?.(attempt);
+
+      const to = new Promise<never>((_, rej) => {
+        const t = setTimeout(() => {
+          clearTimeout(t);
+          rej(new Error(`submitTransferWithin: attempt ${attempt} timed out after ${timeoutMs} ms`));
+        }, timeoutMs);
+      });
+
+      return Promise.race([
+        this.submitTransferWithBin(args),
         to,
       ]) as Promise<{ signature: string }>;
     };

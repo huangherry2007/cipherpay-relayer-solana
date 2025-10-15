@@ -8,6 +8,7 @@ export function prepareRouter(tree: CanonicalTree) {
 
   // POST /api/v1/prepare/deposit
   // body: { commitment: string (bigint-like) }
+  // Returns BE hex for root and path siblings (bottom→top).
   r.post("/deposit", async (req, res, next) => {
     try {
       const { commitment } = req.body ?? {};
@@ -18,33 +19,55 @@ export function prepareRouter(tree: CanonicalTree) {
       const zeroPath = await tree.getPathByIndex(nextIndex);
 
       res.json({
-        merkleRoot: root.toString("hex"),
+        merkleRoot: root.toString("hex"), // BE hex
         nextLeafIndex: nextIndex,
-        inPathElements: zeroPath.pathElements.map((b) => b.toString("hex")),
+        inPathElements: zeroPath.pathElements.map((b) => b.toString("hex")), // BE hex
         inPathIndices: zeroPath.pathIndices,
       });
     } catch (e) { next(e); }
   });
 
   // POST /api/v1/prepare/transfer
-  // body: { inCommitment: string, out1Commitment: string }
+  // body: { inCommitment: string (spent note) }
+  //
+  // BE-only:
+  // - merkleRoot: current root (BE hex)
+  // - inPathElements/Indices: proof for the spent leaf (bottom→top)
+  // - out1PathElements/Indices: zero-path at nextLeafIndex (for OUT1 insert)
+  // - out2PathElements/Indices: zero-path at nextLeafIndex+1 (for OUT2 insert)
+  // - leafIndex: actual index of inCommitment
+  // - nextLeafIndex: cursor before transfer (will advance by +2 on success)
   r.post("/transfer", async (req, res, next) => {
     try {
-      const { inCommitment, out1Commitment } = req.body ?? {};
-      if (!inCommitment || !out1Commitment) {
-        return res.status(400).json({ error: "missing args" });
+      const { inCommitment } = req.body ?? {};
+      if (!inCommitment) {
+        return res.status(400).json({ error: "missing inCommitment" });
       }
 
+      // Path to the SPENT note
       const pathIn = await tree.getPathByCommitment(toBig(inCommitment));
+
+      // Current root and cursor
       const { root, nextIndex } = await tree.getRootAndIndex();
+
+      // Zero paths for the two outgoing notes (next and next+1)
       const pathOut1 = await tree.getPathByIndex(nextIndex);
+      const pathOut2 = await tree.getPathByIndex(nextIndex + 1);
 
       res.json({
-        merkleRoot: root.toString("hex"),
-        inPathElements: pathIn.pathElements.map((b) => b.toString("hex")),
-        inPathIndices: pathIn.pathIndices,
+        merkleRoot: root.toString("hex"), // BE hex
+        // spent path
+        inPathElements:  pathIn.pathElements.map((b) => b.toString("hex")),
+        inPathIndices:   pathIn.pathIndices,
+        leafIndex:       pathIn.index, // include where the input was found
+
+        // zero paths (for outputs)
         out1PathElements: pathOut1.pathElements.map((b) => b.toString("hex")),
-        out1PathIndices: pathOut1.pathIndices,
+        out1PathIndices:  pathOut1.pathIndices,
+        out2PathElements: pathOut2.pathElements.map((b) => b.toString("hex")),
+        out2PathIndices:  pathOut2.pathIndices,
+
+        // cursor before insertion
         nextLeafIndex: nextIndex,
       });
     } catch (e) { next(e); }

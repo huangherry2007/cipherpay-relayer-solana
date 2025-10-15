@@ -15,8 +15,10 @@
     "test:watch": "node --experimental-vm-modules node_modules/jest/bin/jest.js --watch",
     "test:coverage": "node --experimental-vm-modules node_modules/jest/bin/jest.js --coverage",
     "test:mysql": "node --experimental-vm-modules node_modules/jest/bin/jest.js tests/merkle/mysql-merkle-store.test.ts",
-    
-    "test:e2e:deposit": "vitest run tests/e2e/deposit/deposit.test.ts"
+
+    "test:e2e:deposit": "vitest run tests/e2e/deposit/deposit.test.ts",
+    "test:e2e:transfer": "vitest run tests/e2e/transfer/transfer.test.ts"
+
   },
   "dependencies": {
     "@coral-xyz/anchor": "^0.31.1",
