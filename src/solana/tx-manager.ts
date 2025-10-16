@@ -1,10 +1,12 @@
 /* ESM */
+// src/solana/tx-manager.ts
 import * as anchor from "@coral-xyz/anchor";
 import BN from "bn.js";
 import {
   PublicKey,
   SystemProgram,
   TransactionInstruction,
+  ComputeBudgetProgram, // ⬅️ add
 } from "@solana/web3.js";
 import {
   ASSOCIATED_TOKEN_PROGRAM_ID,
@@ -22,6 +24,8 @@ const TREE_SEED = Buffer.from("tree");
 const ROOT_CACHE_SEED = Buffer.from("root_cache");
 const VAULT_SEED = Buffer.from("vault");
 const DEPOSIT_SEED = Buffer.from("deposit");
+// ⬇️ NEW (matches tests/transfer.ts)
+const NULLIFIER_SEED = Buffer.from("nullifier");
 
 const MEMO_PROGRAM_ID = new PublicKey("MemoSq4gqABAXKb96qnH8TysNcWxMyWCqXgDLGmfcHr");
 
@@ -247,5 +251,63 @@ export default class TxManager {
       }
       throw e;
     }
+  }
+
+  /**
+   * ⬇️ NEW: Submit **shielded transfer** with binary proof + 9×32 public inputs.
+   * Mirrors `tests/transfer.ts` (nullifier seed, account set, CU limit).
+   *
+   * NOTE: `mint` is accepted for parity with relayer API but is NOT required by the on-chain IX.
+   */
+  async submitShieldedTransferAtomicBytes(args: {
+    mint: PublicKey;                // accepted but unused by the IX
+    proofBytes: Buffer;             // 256 bytes
+    publicInputsBytes: Buffer;      // 9*32 bytes
+    computeUnitLimit?: number;      // optional override, default from env CU_LIMIT or 800_000
+  }): Promise<string> {
+    const payer = this.provider.wallet.publicKey;
+
+    if (args.proofBytes.length !== 256) {
+      throw new Error(`proofBytes must be 256 bytes, got ${args.proofBytes.length}`);
+    }
+    if (args.publicInputsBytes.length !== 9 * 32) {
+      throw new Error(`publicInputsBytes must be 288 bytes, got ${args.publicInputsBytes.length}`);
+    }
+
+    // Derive nullifier from public signals slot 2 (LE), same as tests/transfer.ts
+    const nullifierBuf = slice32(args.publicInputsBytes, 2);
+
+    const treePda = pda([TREE_SEED], this.programId);
+    const rootCachePda = pda([ROOT_CACHE_SEED], this.programId);
+    const nullifierRecordPda = pda([NULLIFIER_SEED, nullifierBuf], this.programId);
+
+    // Ensure the Merkle root cache exists (idempotent)
+    const setupIxs: TransactionInstruction[] = [];
+    const initRoot = await this.maybeInitRootCacheIx(rootCachePda, payer);
+    if (initRoot) setupIxs.push(initRoot);
+
+    // Compute budget (default 800k or env CU_LIMIT)
+    const cu = Number(process.env.CU_LIMIT ?? 800_000);
+    const cuIx = ComputeBudgetProgram.setComputeUnitLimit({ units: args.computeUnitLimit ?? cu });
+
+    // Build program instruction (must pass a 32-byte Buffer for nullifier)
+    const anchorIx = await (this.program as any).methods
+      .shieldedTransfer(nullifierBuf, args.proofBytes, args.publicInputsBytes)
+      .accountsPartial({
+        payer,
+        tree: treePda,
+        rootCache: rootCachePda,
+        nullifierRecord: nullifierRecordPda,
+        systemProgram: SystemProgram.programId,
+      })
+      .instruction();
+
+    const tx = new anchor.web3.Transaction();
+    // setup (root cache), CU limit, then the zk ix
+    if (setupIxs.length) tx.add(...setupIxs);
+    tx.add(cuIx, anchorIx);
+
+    const sig = await this.provider.sendAndConfirm(tx, [], { skipPreflight: false, commitment: "confirmed" });
+    return sig;
   }
 }

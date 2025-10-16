@@ -12,6 +12,7 @@ import { getPool } from "@/services/db/mysql.js";
 import {
   MySqlMerkleStore,
   type DepositCompletedEvent,
+  type TransferCompletedEvent,
 } from "@/services/merkle/stores/mysql-merkle-store.js";
 
 type AnyIdl = Record<string, any>;
@@ -62,6 +63,13 @@ export type DepositBinArgs = {
   tokenMint: string;         // base58
   proofBytes: Buffer;        // 256 bytes
   publicInputsBytes: Buffer; // 7*32 bytes
+};
+
+/** NEW: transfer args (9*32 public inputs) */
+export type TransferBinArgs = {
+  tokenMint: string;         // base58
+  proofBytes: Buffer;        // 256 bytes
+  publicInputsBytes: Buffer; // 9*32 bytes
 };
 
 type SubmitWithinOpts = {
@@ -125,6 +133,20 @@ const MAP = {
   mint: ["mint"],
 };
 
+/* Accept both snake_case and camelCase for TransferCompleted */
+const XFER_MAP = {
+  nullifier: ["nullifier", "nf", "nf32"],
+  out1_commitment: ["out1_commitment", "out1Commitment"],
+  out2_commitment: ["out2_commitment", "out2Commitment"],
+  enc_note1_hash: ["enc_note1_hash", "encNote1Hash"],
+  enc_note2_hash: ["enc_note2_hash", "encNote2Hash"],
+  old_merkle_root: ["merkle_root_before", "merkleRootBefore", "old_merkle_root", "oldMerkleRoot"],
+  new_merkle_root1: ["new_merkle_root1", "newMerkleRoot1"],
+  new_merkle_root2: ["new_merkle_root2", "newMerkleRoot2"],
+  next_leaf_index: ["next_leaf_index", "nextLeafIndex"],
+  mint: ["mint"],
+};
+
 const toPayload = (raw: any): DepositCompletedEvent => {
   const deposit_hash = mustPick(raw, MAP.deposit_hash, "deposit_hash") as Uint8Array;
   const owner_cipherpay_pubkey = mustPick(raw, MAP.owner_cipherpay_pubkey, "owner_cipherpay_pubkey") as Uint8Array;
@@ -147,6 +169,42 @@ const toPayload = (raw: any): DepositCompletedEvent => {
     commitment,
     old_merkle_root,
     new_merkle_root,
+    next_leaf_index,
+    mint: normalizeMint(mintRaw),
+  };
+};
+
+const toTransferPayload = (raw: any): TransferCompletedEvent => {
+  const nullifier = mustPick(raw, XFER_MAP.nullifier, "nullifier") as Uint8Array;
+  const out1_commitment = mustPick(raw, XFER_MAP.out1_commitment, "out1_commitment") as Uint8Array;
+  const out2_commitment = mustPick(raw, XFER_MAP.out2_commitment, "out2_commitment") as Uint8Array;
+  const enc_note1_hash = mustPick(raw, XFER_MAP.enc_note1_hash, "enc_note1_hash") as Uint8Array;
+  const enc_note2_hash = mustPick(raw, XFER_MAP.enc_note2_hash, "enc_note2_hash") as Uint8Array;
+  const old_merkle_root = mustPick(raw, XFER_MAP.old_merkle_root, "old_merkle_root") as Uint8Array;
+  const new_merkle_root1 = mustPick(raw, XFER_MAP.new_merkle_root1, "new_merkle_root1") as Uint8Array;
+  const new_merkle_root2 = mustPick(raw, XFER_MAP.new_merkle_root2, "new_merkle_root2") as Uint8Array;
+  const next_leaf_index = Number(mustPick(raw, XFER_MAP.next_leaf_index, "next_leaf_index"));
+  const mintRaw = mustPick(raw, XFER_MAP.mint, "mint");
+
+  // quick length checks on all 32B fields
+  for (const [label, val] of Object.entries({
+    nullifier, out1_commitment, out2_commitment,
+    enc_note1_hash, enc_note2_hash,
+    old_merkle_root, new_merkle_root1, new_merkle_root2,
+  })) {
+    if (Buffer.from(val as Uint8Array).length !== 32) {
+      throw new Error(`transfer event bytes wrong length for ${label} (expected 32)`);
+    }
+  }
+  return {
+    nullifier,
+    out1_commitment,
+    out2_commitment,
+    enc_note1_hash,
+    enc_note2_hash,
+    old_merkle_root,
+    new_merkle_root1,
+    new_merkle_root2,
     next_leaf_index,
     mint: normalizeMint(mintRaw),
   };
@@ -234,6 +292,7 @@ class SolanaRelayer {
 
   private store: MySqlMerkleStore | null = null;
   private depositListenerId: number | null = null;
+  private transferListenerId: number | null = null;
   private onLogsSubId: number | null = null;
 
   constructor() {
@@ -296,6 +355,55 @@ class SolanaRelayer {
     throw lastErr instanceof Error ? lastErr : new Error(String(lastErr));
   }
 
+  /** 🔹 NEW: submit a shielded transfer using raw proof/public input binaries. */
+  async submitTransferWithBin(args: TransferBinArgs) {
+    const mint = new web3.PublicKey(args.tokenMint);
+    // TxManager is expected to mirror the deposit path with a transfer variant.
+    // Name chosen to be parallel to submitShieldedDepositAtomicBytes.
+    const sig = await this.txm.submitShieldedTransferAtomicBytes({
+      mint,
+      proofBytes: args.proofBytes,
+      publicInputsBytes: args.publicInputsBytes, // 9*32
+    });
+    return { signature: sig };
+  }
+
+  /** 🔹 NEW: transfer with timeout/retries (optional helper). */
+  async submitTransferWithin(
+    args: TransferBinArgs,
+    opts: SubmitWithinOpts = {}
+  ): Promise<{ signature: string }> {
+    const timeoutMs = opts.timeoutMs ?? 25_000;
+    const retries = Math.max(0, opts.retries ?? 1);
+
+    const attemptOnce = async (attempt: number) => {
+      await opts.onAttempt?.(attempt);
+
+      const to = new Promise<never>((_, rej) => {
+        const t = setTimeout(() => {
+          clearTimeout(t);
+          rej(new Error(`submitTransferWithin: attempt ${attempt} timed out after ${timeoutMs} ms`));
+        }, timeoutMs);
+      });
+
+      return Promise.race([
+        this.submitTransferWithBin(args),
+        to,
+      ]) as Promise<{ signature: string }>;
+    };
+
+    let lastErr: unknown = null;
+    for (let i = 1; i <= 1 + retries; i++) {
+      try {
+        return await attemptOnce(i);
+      } catch (e) {
+        lastErr = e;
+        if (i <= retries) await new Promise((r) => setTimeout(r, 500 * i));
+      }
+    }
+    throw lastErr instanceof Error ? lastErr : new Error(String(lastErr));
+  }
+
   // ---------- Event plumbing ----------
   async startListeners() {
     if (!this.store) {
@@ -326,6 +434,13 @@ class SolanaRelayer {
                 await this.store!.recordDepositCompleted(TREE_ID, payload);
                 console.info("[events] DepositCompleted persisted from onLogs", {
                   leafIndex: payload.next_leaf_index,
+                  mint: payload.mint,
+                });
+              } else if (ev.name === "transferCompleted" || ev.name === "TransferCompleted") {
+                const payload = toTransferPayload(ev.data);
+                await this.store!.recordTransferCompleted!(TREE_ID, payload);
+                console.info("[events] TransferCompleted persisted from onLogs", {
+                  nextLeafIndex: payload.next_leaf_index,
                   mint: payload.mint,
                 });
               }
@@ -360,6 +475,24 @@ class SolanaRelayer {
       );
       console.log("[events] DepositCompleted listener started:", this.depositListenerId);
     }
+
+    // (C) TransferCompleted listener (optional alongside onLogs)
+    if (this.transferListenerId === null) {
+      this.transferListenerId = await this.program.addEventListener(
+        "TransferCompleted",
+        async (ev: any, slot: number, sig?: string) => {
+          try {
+            const payload = toTransferPayload(ev);
+            await this.store!.recordTransferCompleted!(TREE_ID, payload);
+            console.info("[events] TransferCompleted persisted (anchor listener)", { slot, sig });
+          } catch (e: any) {
+            console.error("[events] TransferCompleted handler error:", e?.message || e);
+          }
+        },
+        "processed"
+      );
+      console.log("[events] TransferCompleted listener started:", this.transferListenerId);
+    }
   }
 
   async stopListeners() {
@@ -367,6 +500,11 @@ class SolanaRelayer {
       await this.program.removeEventListener(this.depositListenerId);
       this.depositListenerId = null;
       console.log("[events] DepositCompleted listener stopped");
+    }
+    if (this.transferListenerId !== null) {
+      await this.program.removeEventListener(this.transferListenerId);
+      this.transferListenerId = null;
+      console.log("[events] TransferCompleted listener stopped");
     }
     if (this.onLogsSubId !== null) {
       await this.provider.connection.removeOnLogsListener(this.onLogsSubId);

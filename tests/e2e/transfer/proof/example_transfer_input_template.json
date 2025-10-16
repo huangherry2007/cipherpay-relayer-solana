@@ -1,0 +1,24 @@
+{
+    "inAmount": "100",
+    "inSenderWalletPubKey": "0",
+    "inSenderWalletPrivKey": "0",
+    "inRandomness": "0",
+    "inTokenId": "0",
+    "inMemo": "0",
+
+    "out1Amount": "60",
+    "out1RecipientCipherPayPubKey":
+      "5555555555555555555555555555555555555555555555555555555555555555",
+    "out1Randomness":
+      "0",
+    "out1TokenId": "0",
+    "out1Memo": "0",
+
+    "out2Amount": "40",
+    "out2RecipientCipherPayPubKey":
+      "19671880629798928171529795066366940826437446602236033626838552573503527465966",
+    "out2Randomness":
+      "0",
+    "out2TokenId": "0",
+    "out2Memo": "0"
+  }

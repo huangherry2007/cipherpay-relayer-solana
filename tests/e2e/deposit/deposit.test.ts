@@ -30,7 +30,7 @@ const MINT_ADDRESS =
 const PROOFS_DIR = process.env.DEPOSIT_PROOFS_DIR || path.resolve(__dirname, "./proof");
 const EXAMPLE_INPUT = fs.existsSync(path.join(PROOFS_DIR, "example_input.json"))
   ? path.join(PROOFS_DIR, "example_input.json")
-  : path.join(PROOFS_DIR, "example_input_template.json");
+  : path.join(PROOFS_DIR, "example_deposit_input_template.json");
 const WASM_PATH = process.env.DEPOSIT_WASM || path.join(PROOFS_DIR, "deposit.wasm");
 const ZKEY_PATH = process.env.DEPOSIT_ZKEY || path.join(PROOFS_DIR, "deposit_final.zkey");
 
