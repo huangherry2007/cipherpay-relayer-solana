@@ -1,0 +1,12 @@
+{
+    "recipientWalletPubKey":
+      "1234567890123456789012345678901234567890123456789012345678901234",
+    "recipientWalletPrivKey":
+      "1111111111111111111111111111111111111111111111111111111111111111",
+    "amount": "40",
+    "tokenId": "0",
+    "randomness": "0",
+    "memo": "0",
+    "pathElements": null,
+    "pathIndices": null
+}

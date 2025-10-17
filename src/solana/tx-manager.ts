@@ -161,6 +161,44 @@ export default class TxManager {
     return { ixs, payerAta, vaultAta };
   }
 
+  /** Idempotently ensure root cache + both ATAs (vault & recipient) exist for withdraw. */
+  private async buildWithdrawSetupIxs(
+    payer: PublicKey,
+    mint: PublicKey,
+    vaultOwnerPda: PublicKey,
+    rootCachePda: PublicKey
+  ): Promise<{ ixs: TransactionInstruction[]; recipientAta: PublicKey; vaultAta: PublicKey }> {
+    const ixs: TransactionInstruction[] = [];
+
+    const recipientAta = getAssociatedTokenAddressSync(
+      mint, payer, false, TOKEN_PROGRAM_ID, ASSOCIATED_TOKEN_PROGRAM_ID
+    );
+    const vaultAta = getAssociatedTokenAddressSync(
+      mint, vaultOwnerPda, true, TOKEN_PROGRAM_ID, ASSOCIATED_TOKEN_PROGRAM_ID
+    );
+
+    const initRoot = await this.maybeInitRootCacheIx(rootCachePda, payer);
+    if (initRoot) ixs.push(initRoot);
+
+    if (!(await this.accountExists(recipientAta))) {
+      ixs.push(
+        createAssociatedTokenAccountIdempotentInstruction(
+          payer, recipientAta, payer, mint, TOKEN_PROGRAM_ID, ASSOCIATED_TOKEN_PROGRAM_ID
+        )
+      );
+    }
+    if (!(await this.accountExists(vaultAta))) {
+      ixs.push(
+        createAssociatedTokenAccountIdempotentInstruction(
+          payer, vaultAta, vaultOwnerPda, mint, TOKEN_PROGRAM_ID, ASSOCIATED_TOKEN_PROGRAM_ID
+        )
+      );
+    }
+
+    // NOTE: for withdraw we DO NOT pre-fund/unwrap wSOL here. Program will transfer from vault -> recipient.
+    return { ixs, recipientAta, vaultAta };
+  }
+
   /**
    * Submit deposit with **binary** proof + publics.
    * - `publicInputsBytes` MUST be 7×32 in the SAME Circom order used by your working Anchor test.
@@ -310,4 +348,75 @@ export default class TxManager {
     const sig = await this.provider.sendAndConfirm(tx, [], { skipPreflight: false, commitment: "confirmed" });
     return sig;
   }
+
+  /**
+   * Submit **shielded withdraw** with binary proof + 5×32 public inputs.
+   * Public signals order:
+   *   [0]=nullifier, [1]=merkleRoot, [2]=recipientWalletPubKey, [3]=amount, [4]=tokenId
+   * Assumes recipient = payer (create payer's ATA if missing).
+   */
+  async submitShieldedWithdrawAtomicBytes(args: {
+    mint: PublicKey;
+    proofBytes: Buffer;            // 256
+    publicInputsBytes: Buffer;     // 5 * 32
+    computeUnitLimit?: number;
+  }): Promise<string> {
+    const payer = this.provider.wallet.publicKey;
+
+    if (args.proofBytes.length !== 256) {
+      throw new Error(`proofBytes must be 256 bytes, got ${args.proofBytes.length}`);
+    }
+    if (args.publicInputsBytes.length !== 5 * 32) {
+      throw new Error(`publicInputsBytes must be 160 bytes, got ${args.publicInputsBytes.length}`);
+    }
+
+    // [0] = nullifier (LE)
+    const nullifierBuf   = slice32(args.publicInputsBytes, 0);
+    const nullifierHexLE = hexLE32(nullifierBuf);
+
+    const treePda       = pda([TREE_SEED], this.programId);
+    const rootCachePda  = pda([ROOT_CACHE_SEED], this.programId);
+    const vaultOwnerPda = pda([VAULT_SEED], this.programId);
+    const nullifierPda  = pda([NULLIFIER_SEED, nullifierBuf], this.programId);
+
+    // Ensure root_cache + both ATAs (vault & recipient=payer)
+    const { ixs: setupIxs, recipientAta, vaultAta } = await this.buildWithdrawSetupIxs(
+      payer, args.mint, vaultOwnerPda, rootCachePda
+    );
+
+    const cuUnits = Number(process.env.CU_LIMIT ?? 800_000);
+    const cuIx    = ComputeBudgetProgram.setComputeUnitLimit({ units: args.computeUnitLimit ?? cuUnits });
+    const memoIx  = this.memoIxUtf8("withdraw:" + nullifierHexLE);
+
+    // 🔴 FIX: include `recipientOwner` (equals payer) + full token accounts
+    const anchorIx = await (this.program as any).methods
+      .shieldedWithdraw(nullifierBuf, args.proofBytes, args.publicInputsBytes)
+      .accountsPartial({
+        payer,
+        // optional: if your IDL doesn't include `tree`, it's ignored; safe to omit too.
+        // tree: treePda,
+        rootCache: rootCachePda,
+        nullifierRecord: nullifierPda,
+        vaultPda: vaultOwnerPda,
+        vaultTokenAccount: vaultAta,
+        recipientOwner: payer,            // ← required by program (matches tests/withdraw.ts)
+        recipientTokenAccount: recipientAta,
+        tokenMint: args.mint,
+        systemProgram: SystemProgram.programId,
+        tokenProgram: TOKEN_PROGRAM_ID,
+        associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
+      })
+      .instruction();
+
+    const tx = new anchor.web3.Transaction();
+    if (setupIxs.length) tx.add(...setupIxs);
+    tx.add(cuIx, memoIx, anchorIx);
+
+    const sig = await this.provider.sendAndConfirm(tx, [], {
+      skipPreflight: false,
+      commitment: "confirmed",
+    });
+    return sig;
+  }
+
 }

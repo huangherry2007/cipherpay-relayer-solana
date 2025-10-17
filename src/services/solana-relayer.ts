@@ -13,6 +13,7 @@ import {
   MySqlMerkleStore,
   type DepositCompletedEvent,
   type TransferCompletedEvent,
+  type WithdrawCompletedEvent,
 } from "@/services/merkle/stores/mysql-merkle-store.js";
 
 type AnyIdl = Record<string, any>;
@@ -70,6 +71,13 @@ export type TransferBinArgs = {
   tokenMint: string;         // base58
   proofBytes: Buffer;        // 256 bytes
   publicInputsBytes: Buffer; // 9*32 bytes
+};
+
+/** NEW: withdraw args (5*32 public inputs) */
+export type WithdrawBinArgs = {
+  tokenMint: string;         // base58
+  proofBytes: Buffer;        // 256 bytes
+  publicInputsBytes: Buffer; // 5*32 bytes
 };
 
 type SubmitWithinOpts = {
@@ -209,6 +217,47 @@ const toTransferPayload = (raw: any): TransferCompletedEvent => {
     mint: normalizeMint(mintRaw),
   };
 };
+
+/* Accept both snake_case and camelCase for WithdrawCompleted */
+const WD_MAP = {
+  nullifier: ["nullifier", "nf", "nf32"],
+  old_merkle_root: ["merkle_root_used", "merkleRootUsed"],
+  recipient_wallet_pubkey: ["recipient", "recipientWalletPubKey"],
+  amount: ["amount"],
+  mint: ["mint"],
+};
+
+const toWithdrawPayload = (raw: any): WithdrawCompletedEvent => {
+  const nullifier = mustPick(raw, WD_MAP.nullifier, "nullifier") as Uint8Array;
+  const old_merkle_root = mustPick(raw, WD_MAP.old_merkle_root, "old_merkle_root") as Uint8Array;
+
+  // optional fields — some programs emit them, some don’t
+  const recipient_wallet_pubkey = pick(raw, WD_MAP.recipient_wallet_pubkey) as Uint8Array | undefined;
+  const amount = pick(raw, WD_MAP.amount) as Uint8Array | undefined;
+  const mintRaw = pick(raw, WD_MAP.mint);
+
+  // minimal length checks
+  for (const [label, val] of Object.entries({ nullifier, old_merkle_root })) {
+    if (Buffer.from(val as Uint8Array).length !== 32) {
+      throw new Error(`withdraw event bytes wrong length for ${label} (expected 32)`);
+    }
+  }
+  if (recipient_wallet_pubkey && Buffer.from(recipient_wallet_pubkey).length !== 32) {
+    throw new Error(`withdraw event bytes wrong length for recipient_wallet_pubkey (expected 32)`);
+  }
+  if (amount && Buffer.from(amount).length !== 32) {
+    throw new Error(`withdraw event bytes wrong length for amount (expected 32)`);
+  }
+
+  return {
+    nullifier,
+    old_merkle_root,
+    recipient_wallet_pubkey,
+    amount,
+    mint: mintRaw ? normalizeMint(mintRaw) : "", // optional
+  };
+};
+
 
 /* Pretty debug block comparing BE/LE + decimal and optional env references */
 async function debugEventBlock(store: MySqlMerkleStore, ev: DepositCompletedEvent) {
@@ -404,6 +453,53 @@ class SolanaRelayer {
     throw lastErr instanceof Error ? lastErr : new Error(String(lastErr));
   }
 
+  /** NEW: submit a shielded withdraw using raw proof/public input binaries. */
+  async submitWithdrawWithBin(args: WithdrawBinArgs) {
+    const mint = new web3.PublicKey(args.tokenMint);
+    const sig = await this.txm.submitShieldedWithdrawAtomicBytes({
+      mint,
+      proofBytes: args.proofBytes,
+      publicInputsBytes: args.publicInputsBytes, // 5*32
+    });
+    return { signature: sig };
+  }
+
+  /** NEW: withdraw with timeout/retries (optional helper). */
+  async submitWithdrawWithin(
+    args: WithdrawBinArgs,
+    opts: SubmitWithinOpts = {}
+  ): Promise<{ signature: string }> {
+    const timeoutMs = opts.timeoutMs ?? 25_000;
+    const retries = Math.max(0, opts.retries ?? 1);
+
+    const attemptOnce = async (attempt: number) => {
+      await opts.onAttempt?.(attempt);
+
+      const to = new Promise<never>((_, rej) => {
+        const t = setTimeout(() => {
+          clearTimeout(t);
+          rej(new Error(`submitWithdrawWithin: attempt ${attempt} timed out after ${timeoutMs} ms`));
+        }, timeoutMs);
+      });
+
+      return Promise.race([
+        this.submitWithdrawWithBin(args),
+        to,
+      ]) as Promise<{ signature: string }>;
+    };
+
+    let lastErr: unknown = null;
+    for (let i = 1; i <= 1 + retries; i++) {
+      try {
+        return await attemptOnce(i);
+      } catch (e) {
+        lastErr = e;
+        if (i <= retries) await new Promise((r) => setTimeout(r, 500 * i));
+      }
+    }
+    throw lastErr instanceof Error ? lastErr : new Error(String(lastErr));
+  }
+
   // ---------- Event plumbing ----------
   async startListeners() {
     if (!this.store) {
@@ -443,7 +539,21 @@ class SolanaRelayer {
                   nextLeafIndex: payload.next_leaf_index,
                   mint: payload.mint,
                 });
+              } else if (ev.name === "withdrawCompleted" || ev.name === "WithdrawCompleted") {
+                const payload = toWithdrawPayload(ev.data);
+                // No Merkle mutation to persist; keep an optional hook for auditing/metrics
+                try {
+                  await this.store!.recordWithdrawCompleted?.(TREE_ID, payload);
+                } catch (e: any) {
+                  console.warn("[events] recordWithdrawCompleted hook error:", e?.message || e);
+                }
+                console.info("[events] WithdrawCompleted observed from onLogs", {
+                  mint: payload.mint,
+                  nullifier_hex_LE: hex(payload.nullifier),
+                  old_root_BE_hex: hex(viewBE(payload.old_merkle_root)),
+                });
               }
+              
             }
           } catch (e: any) {
             console.error("[onLogs] parse/persist error:", e?.message || e);

@@ -39,7 +39,7 @@ function encG1(p: any): Buffer {
 }
 function encG2(p: any): Buffer {
   // IMPORTANT: keep pairs **as they come** (this matches your working converter)
-  // Accept [[x0,x1],[y0,y1], ...] or flat [x0,x1,y0,y1] or {x:[..],y:[..]}
+  // Accept [[x0,x1],[y0,y1]] or flat [x0,x1,y0,y1] or {x:[..],y:[..]}
   let x0, x1, y0, y1;
   if (Array.isArray(p)) {
     if (p.length === 4 && !Array.isArray(p[0])) {
@@ -120,8 +120,8 @@ submit.post("/deposit", async (req, res) => {
       proofBin   = proofJsonToBin(proof);
       publicsBin = publicsToBin(publicSignals);
     } else if (proofBytes && publicInputsBytes) {
-      proofBin   = Buffer.isBuffer(proofBytes) ? proofBytes : Buffer.from(proofBytes, proofBytes.startsWith?.("0x") ? "hex" : "base64");
-      publicsBin = Buffer.isBuffer(publicInputsBytes) ? publicInputsBytes : Buffer.from(publicInputsBytes, publicInputsBytes.startsWith?.("0x") ? "hex" : "base64");
+      proofBin   = Buffer.isBuffer(proofBytes) ? proofBytes : Buffer.from(proofBytes, (proofBytes as any).startsWith?.("0x") ? "hex" : "base64");
+      publicsBin = Buffer.isBuffer(publicInputsBytes) ? publicInputsBytes : Buffer.from(publicInputsBytes, (publicInputsBytes as any).startsWith?.("0x") ? "hex" : "base64");
     } else {
       return res.status(400).json({ ok: false, error: "BadRequest", message: "Provide (proof, publicSignals) or (proofBytes, publicInputsBytes)" });
     }
@@ -207,8 +207,8 @@ submit.post("/transfer", async (req, res) => {
       proofBin   = proofJsonToBin(proof);
       publicsBin = publicsToBin(publicSignals);
     } else if (proofBytes && publicInputsBytes) {
-      proofBin   = Buffer.isBuffer(proofBytes) ? proofBytes : Buffer.from(proofBytes, proofBytes.startsWith?.("0x") ? "hex" : "base64");
-      publicsBin = Buffer.isBuffer(publicInputsBytes) ? publicInputsBytes : Buffer.from(publicInputsBytes, publicInputsBytes.startsWith?.("0x") ? "hex" : "base64");
+      proofBin   = Buffer.isBuffer(proofBytes) ? proofBytes : Buffer.from(proofBytes, (proofBytes as any).startsWith?.("0x") ? "hex" : "base64");
+      publicsBin = Buffer.isBuffer(publicInputsBytes) ? publicInputsBytes : Buffer.from(publicInputsBytes, (publicInputsBytes as any).startsWith?.("0x") ? "hex" : "base64");
     } else {
       return res.status(400).json({ ok: false, error: "BadRequest", message: "Provide (proof, publicSignals) or (proofBytes, publicInputsBytes)" });
     }
@@ -235,6 +235,104 @@ submit.post("/transfer", async (req, res) => {
 
     // Relay to Solana (BIN path). Your relayer should mirror deposit’s BIN flow.
     const out = await solanaRelayer.submitTransferWithBin({
+      tokenMint,
+      proofBytes: proofBin,
+      publicInputsBytes: publicsBin,
+    });
+
+    return res.json({ ok: true, signature: out.signature });
+  } catch (e: any) {
+    console.error("API Error:", e);
+    return res.status(500).json({
+      ok: false,
+      error: "SolanaTransactionError",
+      message: e?.message || String(e),
+    });
+  }
+});
+
+/* -------------------- WITHDRAW (new) -------------------- */
+
+// Public signals order (withdraw circuit):
+// ["nullifier","merkleRoot","recipientWalletPubKey","amount","tokenId"]
+const W_PS = { NULLIFIER:0, MERKLE_ROOT:1, RECIPIENT_PK:2, AMOUNT:3, TOKEN_ID:4 } as const;
+
+// POST /api/v1/submit/withdraw
+submit.post("/withdraw", async (req, res) => {
+  const requestId = (req as any).requestId || "";
+  try {
+    console.info(
+      JSON.stringify({
+        level: "info",
+        component: "app",
+        requestId,
+        method: "POST",
+        path: "/api/v1/submit/withdraw",
+        ip: req.ip,
+        msg: "Withdraw operation initiated",
+      })
+    );
+
+    const {
+      tokenMint,
+      proof,             // snarkjs JSON (preferred)
+      publicSignals,     // array of decimal strings (len 5)
+      // alternatively BIN:
+      proofBytes,
+      publicInputsBytes,
+      // optional explicit pubs (for logs/diagnostics)
+      nullifier, oldMerkleRoot, recipientWalletPubKey, amount, tokenId,
+    } = req.body || {};
+
+    if (!tokenMint) {
+      return res.status(400).json({ ok: false, error: "BadRequest", message: "tokenMint required" });
+    }
+
+    let proofBin: Buffer;
+    let publicsBin: Buffer;
+
+    if (proof && publicSignals) {
+      if (process.env.SKIP_LOCAL_VK !== "1") {
+        const pv = new ProofVerifier();
+        await pv.verify("withdraw", proof, publicSignals);
+      }
+      proofBin   = proofJsonToBin(proof);
+      publicsBin = publicsToBin(publicSignals);
+    } else if (proofBytes && publicInputsBytes) {
+      proofBin   = Buffer.isBuffer(proofBytes) ? proofBytes : Buffer.from(proofBytes, (proofBytes as any).startsWith?.("0x") ? "hex" : "base64");
+      publicsBin = Buffer.isBuffer(publicInputsBytes) ? publicInputsBytes : Buffer.from(publicInputsBytes, (publicInputsBytes as any).startsWith?.("0x") ? "hex" : "base64");
+    } else {
+      return res.status(400).json({
+        ok: false, error: "BadRequest",
+        message: "Provide (proof, publicSignals) or (proofBytes, publicInputsBytes)"
+      });
+    }
+
+    if (proofBin.length !== 256) {
+      return res.status(400).json({
+        ok: false, error: "BadProofSize",
+        message: `proofBytes must be 256 bytes, got ${proofBin.length}`
+      });
+    }
+    if (publicsBin.length !== 5 * 32) {
+      return res.status(400).json({
+        ok: false, error: "BadPublicsSize",
+        message: `publicInputsBytes must be 160 bytes, got ${publicsBin.length}`
+      });
+    }
+
+    // Helpful logs (LE hex like other routes)
+    const nullifierLE = hexLE32(slice32(publicsBin, W_PS.NULLIFIER));
+    const rootLE      = hexLE32(slice32(publicsBin, W_PS.MERKLE_ROOT));
+    console.log({
+      proofBytes0_32: hexLE32(slice32(proofBin, 0)),
+      nullifier_hex: nullifierLE,
+      spent_root_hex: rootLE,
+      explicit: { nullifier, oldMerkleRoot, recipientWalletPubKey, amount, tokenId },
+    });
+
+    // Relay to Solana (BIN path).
+    const out = await solanaRelayer.submitWithdrawWithBin({
       tokenMint,
       proofBytes: proofBin,
       publicInputsBytes: publicsBin,
