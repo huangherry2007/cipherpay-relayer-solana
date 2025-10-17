@@ -87,6 +87,7 @@ export function prepareRouter(tree: CanonicalTree) {
         merkleRoot: root.toString("hex"),
         pathElements: path.pathElements.map((b) => b.toString("hex")),
         pathIndices: path.pathIndices,
+        leafIndex: path.index,
       });
     } catch (e) { next(e); }
   });

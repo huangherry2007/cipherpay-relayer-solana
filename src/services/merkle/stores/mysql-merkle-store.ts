@@ -33,6 +33,15 @@ export type TransferCompletedEvent = {
   mint: string;                   // base58
 };
 
+export type WithdrawCompletedEvent = {
+  nullifier: Uint8Array;         // LE32
+  old_merkle_root: Uint8Array;   // LE32 (root at the time of spend)
+  recipient_wallet_pubkey?: Uint8Array; // LE32 (optional, if emitted)
+  amount?: Uint8Array;           // LE32 (optional)
+  token_id?: Uint8Array;         // LE32 (optional)
+  mint: string;                  // base58 (if emitted)
+};
+
 export interface MerkleStore {
   // meta
   getDepth(treeId: number): Promise<number>;
@@ -64,6 +73,7 @@ export interface MerkleStore {
   // on-chain events
   recordDepositCompleted?(treeId: number, ev: DepositCompletedEvent): Promise<void>;
   recordTransferCompleted?(treeId: number, ev: TransferCompletedEvent): Promise<void>;
+  recordWithdrawCompleted?(treeId: number, ev: WithdrawCompletedEvent): Promise<void>;
 }
 
 export class MySqlMerkleStore implements MerkleStore {
@@ -565,4 +575,11 @@ export class MySqlMerkleStore implements MerkleStore {
       conn.release();
     }
   }
+
+  async recordWithdrawCompleted(treeId: number, _ev: WithdrawCompletedEvent): Promise<void> {
+    // Intentionally a no-op: withdraw does not modify the Merkle tree.
+    // If you later persist nullifiers or accounting, implement it here.
+    return;
+  }
+
 }
