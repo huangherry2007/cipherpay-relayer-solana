@@ -6,7 +6,7 @@ import {
   PublicKey,
   SystemProgram,
   TransactionInstruction,
-  ComputeBudgetProgram, // ⬅️ add
+  ComputeBudgetProgram,
 } from "@solana/web3.js";
 import {
   ASSOCIATED_TOKEN_PROGRAM_ID,
@@ -24,7 +24,6 @@ const TREE_SEED = Buffer.from("tree");
 const ROOT_CACHE_SEED = Buffer.from("root_cache");
 const VAULT_SEED = Buffer.from("vault");
 const DEPOSIT_SEED = Buffer.from("deposit");
-// ⬇️ NEW (matches tests/transfer.ts)
 const NULLIFIER_SEED = Buffer.from("nullifier");
 
 const MEMO_PROGRAM_ID = new PublicKey("MemoSq4gqABAXKb96qnH8TysNcWxMyWCqXgDLGmfcHr");
@@ -50,6 +49,28 @@ function slice32(buf: Buffer, i: number): Buffer {
 function hexLE32(buf: Buffer): string {
   return Buffer.from(buf).toString("hex");
 }
+function pk(v?: string | PublicKey): PublicKey | undefined {
+  if (!v) return undefined;
+  return typeof v === "string" ? new PublicKey(v) : v;
+}
+
+/** Optional client overrides for deposit source. */
+export type DepositSourceOverride = {
+  /** Base58 or PublicKey of the token owner paying the deposit. Defaults to relayer payer. */
+  sourceOwner?: string | PublicKey;
+  /** Base58 or PublicKey of an explicit source ATA to use (skips creating an ATA). */
+  sourceTokenAccount?: string | PublicKey;
+  /** If true, use a pre-created delegate to move tokens from the source ATA. */
+  useDelegate?: boolean;
+};
+
+/** Optional client overrides for withdraw target. */
+export type WithdrawTargetOverride = {
+  /** Base58 or PublicKey of the recipient owner. Defaults to relayer payer. */
+  recipientOwner?: string | PublicKey;
+  /** Base58 or PublicKey of an explicit recipient ATA to use (skips deriving/creating). */
+  recipientTokenAccount?: string | PublicKey;
+};
 
 export default class TxManager {
   private readonly program: anchor.Program<any>;
@@ -118,47 +139,52 @@ export default class TxManager {
   }
 
   private async buildSetupIxs(
-    payer: PublicKey,
+    sourceOwner: PublicKey,
     mint: PublicKey,
     vaultOwnerPda: PublicKey,
     amount: BN,
-    rootCachePda: PublicKey
-  ): Promise<{ ixs: TransactionInstruction[]; payerAta: PublicKey; vaultAta: PublicKey }> {
+    rootCachePda: PublicKey,
+    explicitSourceAta?: PublicKey
+  ): Promise<{ ixs: TransactionInstruction[]; sourceAta: PublicKey; vaultAta: PublicKey }> {
     const ixs: TransactionInstruction[] = [];
 
-    const payerAta = getAssociatedTokenAddressSync(
-      mint, payer, false, TOKEN_PROGRAM_ID, ASSOCIATED_TOKEN_PROGRAM_ID
-    );
+    const sourceAta =
+      explicitSourceAta ??
+      getAssociatedTokenAddressSync(
+        mint, sourceOwner, false, TOKEN_PROGRAM_ID, ASSOCIATED_TOKEN_PROGRAM_ID
+      );
+
     const vaultAta = getAssociatedTokenAddressSync(
       mint, vaultOwnerPda, true, TOKEN_PROGRAM_ID, ASSOCIATED_TOKEN_PROGRAM_ID
     );
 
-    const initRoot = await this.maybeInitRootCacheIx(rootCachePda, payer);
+    const initRoot = await this.maybeInitRootCacheIx(rootCachePda, sourceOwner);
     if (initRoot) ixs.push(initRoot);
 
-    if (!(await this.accountExists(payerAta))) {
+    // Only create the derived ATA when we're NOT using an explicit one
+    if (!explicitSourceAta && !(await this.accountExists(sourceAta))) {
       ixs.push(
         createAssociatedTokenAccountIdempotentInstruction(
-          payer, payerAta, payer, mint, TOKEN_PROGRAM_ID, ASSOCIATED_TOKEN_PROGRAM_ID
+          sourceOwner, sourceAta, sourceOwner, mint, TOKEN_PROGRAM_ID, ASSOCIATED_TOKEN_PROGRAM_ID
         )
       );
     }
     if (!(await this.accountExists(vaultAta))) {
       ixs.push(
         createAssociatedTokenAccountIdempotentInstruction(
-          payer, vaultAta, vaultOwnerPda, mint, TOKEN_PROGRAM_ID, ASSOCIATED_TOKEN_PROGRAM_ID
+          sourceOwner, vaultAta, vaultOwnerPda, mint, TOKEN_PROGRAM_ID, ASSOCIATED_TOKEN_PROGRAM_ID
         )
       );
     }
 
     if (mint.equals(NATIVE_MINT) && amount.gt(new BN(0))) {
       ixs.push(
-        SystemProgram.transfer({ fromPubkey: payer, toPubkey: payerAta, lamports: Number(amount) }),
-        createSyncNativeInstruction(payerAta)
+        SystemProgram.transfer({ fromPubkey: sourceOwner, toPubkey: sourceAta, lamports: Number(amount) }),
+        createSyncNativeInstruction(sourceAta)
       );
     }
 
-    return { ixs, payerAta, vaultAta };
+    return { ixs, sourceAta, vaultAta };
   }
 
   /** Idempotently ensure root cache + both ATAs (vault & recipient) exist for withdraw. */
@@ -166,12 +192,15 @@ export default class TxManager {
     payer: PublicKey,
     mint: PublicKey,
     vaultOwnerPda: PublicKey,
-    rootCachePda: PublicKey
-  ): Promise<{ ixs: TransactionInstruction[]; recipientAta: PublicKey; vaultAta: PublicKey }> {
+    rootCachePda: PublicKey,
+    recipientOwnerOverride?: PublicKey
+  ): Promise<{ ixs: TransactionInstruction[]; recipientAta: PublicKey; recipientOwner: PublicKey; vaultAta: PublicKey }> {
     const ixs: TransactionInstruction[] = [];
 
+    const recipientOwner = recipientOwnerOverride ?? payer;
+
     const recipientAta = getAssociatedTokenAddressSync(
-      mint, payer, false, TOKEN_PROGRAM_ID, ASSOCIATED_TOKEN_PROGRAM_ID
+      mint, recipientOwner, false, TOKEN_PROGRAM_ID, ASSOCIATED_TOKEN_PROGRAM_ID
     );
     const vaultAta = getAssociatedTokenAddressSync(
       mint, vaultOwnerPda, true, TOKEN_PROGRAM_ID, ASSOCIATED_TOKEN_PROGRAM_ID
@@ -183,7 +212,7 @@ export default class TxManager {
     if (!(await this.accountExists(recipientAta))) {
       ixs.push(
         createAssociatedTokenAccountIdempotentInstruction(
-          payer, recipientAta, payer, mint, TOKEN_PROGRAM_ID, ASSOCIATED_TOKEN_PROGRAM_ID
+          payer, recipientAta, recipientOwner, mint, TOKEN_PROGRAM_ID, ASSOCIATED_TOKEN_PROGRAM_ID
         )
       );
     }
@@ -195,20 +224,20 @@ export default class TxManager {
       );
     }
 
-    // NOTE: for withdraw we DO NOT pre-fund/unwrap wSOL here. Program will transfer from vault -> recipient.
-    return { ixs, recipientAta, vaultAta };
+    return { ixs, recipientAta, recipientOwner, vaultAta };
   }
 
   /**
    * Submit deposit with **binary** proof + publics.
-   * - `publicInputsBytes` MUST be 7×32 in the SAME Circom order used by your working Anchor test.
-   * - `proofBytes` MUST be 256 bytes (G1||G2||G1) with LE limbs and the same G2 pair ordering as your converter.
+   * publicInputsBytes MUST be 7×32; proofBytes MUST be 256.
+   * Optional `source` overrides (owner/ATA/useDelegate).
    */
   async submitShieldedDepositAtomicBytes(args: {
     mint: PublicKey;
     amount: bigint | number | BN;
     proofBytes: Buffer;
     publicInputsBytes: Buffer;
+    source?: DepositSourceOverride;
   }): Promise<string> {
     const payer = this.provider.wallet.publicKey;
 
@@ -219,7 +248,6 @@ export default class TxManager {
       throw new Error(`publicInputsBytes must be 224 bytes, got ${args.publicInputsBytes.length}`);
     }
 
-    // Important: derive deposit hash from publics[5] (LE) — identical to anchor test
     const depositHashBytes = slice32(args.publicInputsBytes, 5);
     const depositHashHexLE = hexLE32(depositHashBytes);
 
@@ -234,30 +262,35 @@ export default class TxManager {
     const vaultOwnerPda = pda([VAULT_SEED], this.programId);
     const depositMarkerPda = pda([DEPOSIT_SEED, depositHashBytes], this.programId);
 
+    // Normalize overrides
+    const srcOwner = pk(args.source?.sourceOwner) ?? payer;
+    const explicitSourceAta = pk(args.source?.sourceTokenAccount);
+    const useDelegate = !!args.source?.useDelegate;
+
     const mintDecimals = await this.getMintDecimals(args.mint);
 
-    // Stage A — setup
-    const { ixs: setupIxs, payerAta, vaultAta } = await this.buildSetupIxs(
-      payer, args.mint, vaultOwnerPda, amountBN, rootCachePda
+    // Stage A — setup (creates ATAs if needed unless an explicit source ATA is provided)
+    const { ixs: setupIxs, sourceAta, vaultAta } = await this.buildSetupIxs(
+      srcOwner, args.mint, vaultOwnerPda, amountBN, rootCachePda, explicitSourceAta
     );
     await this.sendIxs(setupIxs);
 
     // Stage B — deposit
     const preIxs: TransactionInstruction[] = [];
-    // Transfer first
     if (amountBN.gt(new BN(0))) {
+      // If `useDelegate`, caller is responsible for having set a delegate on sourceAta
+      // that the relayer can sign with. Otherwise, we transfer as `srcOwner` (payer in tests).
       preIxs.push(
         createTransferCheckedInstruction(
-          payerAta,
+          sourceAta,
           args.mint,
           vaultAta,
-          payer,
+          srcOwner, // authority
           BigInt(amountBN.toString()),
           mintDecimals
         )
       );
     }
-    // Memo with **prefix** like your anchor test ("deposit:" + hex)
     preIxs.push(this.memoIxUtf8("deposit:" + depositHashHexLE));
 
     const run = () =>
@@ -292,16 +325,13 @@ export default class TxManager {
   }
 
   /**
-   * ⬇️ NEW: Submit **shielded transfer** with binary proof + 9×32 public inputs.
-   * Mirrors `tests/transfer.ts` (nullifier seed, account set, CU limit).
-   *
-   * NOTE: `mint` is accepted for parity with relayer API but is NOT required by the on-chain IX.
+   * Submit **shielded transfer** with binary proof + 9×32 public inputs.
    */
   async submitShieldedTransferAtomicBytes(args: {
     mint: PublicKey;                // accepted but unused by the IX
     proofBytes: Buffer;             // 256 bytes
     publicInputsBytes: Buffer;      // 9*32 bytes
-    computeUnitLimit?: number;      // optional override, default from env CU_LIMIT or 800_000
+    computeUnitLimit?: number;      // optional override
   }): Promise<string> {
     const payer = this.provider.wallet.publicKey;
 
@@ -312,23 +342,19 @@ export default class TxManager {
       throw new Error(`publicInputsBytes must be 288 bytes, got ${args.publicInputsBytes.length}`);
     }
 
-    // Derive nullifier from public signals slot 2 (LE), same as tests/transfer.ts
     const nullifierBuf = slice32(args.publicInputsBytes, 2);
 
     const treePda = pda([TREE_SEED], this.programId);
     const rootCachePda = pda([ROOT_CACHE_SEED], this.programId);
     const nullifierRecordPda = pda([NULLIFIER_SEED, nullifierBuf], this.programId);
 
-    // Ensure the Merkle root cache exists (idempotent)
     const setupIxs: TransactionInstruction[] = [];
     const initRoot = await this.maybeInitRootCacheIx(rootCachePda, payer);
     if (initRoot) setupIxs.push(initRoot);
 
-    // Compute budget (default 800k or env CU_LIMIT)
     const cu = Number(process.env.CU_LIMIT ?? 800_000);
     const cuIx = ComputeBudgetProgram.setComputeUnitLimit({ units: args.computeUnitLimit ?? cu });
 
-    // Build program instruction (must pass a 32-byte Buffer for nullifier)
     const anchorIx = await (this.program as any).methods
       .shieldedTransfer(nullifierBuf, args.proofBytes, args.publicInputsBytes)
       .accountsPartial({
@@ -341,7 +367,6 @@ export default class TxManager {
       .instruction();
 
     const tx = new anchor.web3.Transaction();
-    // setup (root cache), CU limit, then the zk ix
     if (setupIxs.length) tx.add(...setupIxs);
     tx.add(cuIx, anchorIx);
 
@@ -351,15 +376,15 @@ export default class TxManager {
 
   /**
    * Submit **shielded withdraw** with binary proof + 5×32 public inputs.
-   * Public signals order:
-   *   [0]=nullifier, [1]=merkleRoot, [2]=recipientWalletPubKey, [3]=amount, [4]=tokenId
-   * Assumes recipient = payer (create payer's ATA if missing).
+   * Public signals order: [nullifier, merkleRoot, recipientWalletPubKey, amount, tokenId]
+   * Optional target overrides (owner/ATA).
    */
   async submitShieldedWithdrawAtomicBytes(args: {
     mint: PublicKey;
     proofBytes: Buffer;            // 256
     publicInputsBytes: Buffer;     // 5 * 32
     computeUnitLimit?: number;
+    target?: WithdrawTargetOverride;
   }): Promise<string> {
     const payer = this.provider.wallet.publicKey;
 
@@ -370,36 +395,36 @@ export default class TxManager {
       throw new Error(`publicInputsBytes must be 160 bytes, got ${args.publicInputsBytes.length}`);
     }
 
-    // [0] = nullifier (LE)
     const nullifierBuf   = slice32(args.publicInputsBytes, 0);
     const nullifierHexLE = hexLE32(nullifierBuf);
 
-    const treePda       = pda([TREE_SEED], this.programId);
     const rootCachePda  = pda([ROOT_CACHE_SEED], this.programId);
     const vaultOwnerPda = pda([VAULT_SEED], this.programId);
     const nullifierPda  = pda([NULLIFIER_SEED, nullifierBuf], this.programId);
 
-    // Ensure root_cache + both ATAs (vault & recipient=payer)
-    const { ixs: setupIxs, recipientAta, vaultAta } = await this.buildWithdrawSetupIxs(
-      payer, args.mint, vaultOwnerPda, rootCachePda
-    );
+    // Normalize overrides
+    const targetOwnerOverride = pk(args.target?.recipientOwner);
+    const explicitTargetAta   = pk(args.target?.recipientTokenAccount);
+
+    // Ensure root_cache + both ATAs (vault & recipient)
+    const { ixs: setupIxs, recipientAta: defaultRecipientAta, recipientOwner, vaultAta } =
+      await this.buildWithdrawSetupIxs(payer, args.mint, vaultOwnerPda, rootCachePda, targetOwnerOverride);
+
+    const recipientAta = explicitTargetAta ?? defaultRecipientAta;
 
     const cuUnits = Number(process.env.CU_LIMIT ?? 800_000);
     const cuIx    = ComputeBudgetProgram.setComputeUnitLimit({ units: args.computeUnitLimit ?? cuUnits });
     const memoIx  = this.memoIxUtf8("withdraw:" + nullifierHexLE);
 
-    // 🔴 FIX: include `recipientOwner` (equals payer) + full token accounts
     const anchorIx = await (this.program as any).methods
       .shieldedWithdraw(nullifierBuf, args.proofBytes, args.publicInputsBytes)
       .accountsPartial({
         payer,
-        // optional: if your IDL doesn't include `tree`, it's ignored; safe to omit too.
-        // tree: treePda,
         rootCache: rootCachePda,
         nullifierRecord: nullifierPda,
         vaultPda: vaultOwnerPda,
         vaultTokenAccount: vaultAta,
-        recipientOwner: payer,            // ← required by program (matches tests/withdraw.ts)
+        recipientOwner,                  // always a PublicKey
         recipientTokenAccount: recipientAta,
         tokenMint: args.mint,
         systemProgram: SystemProgram.programId,
@@ -418,5 +443,4 @@ export default class TxManager {
     });
     return sig;
   }
-
 }
