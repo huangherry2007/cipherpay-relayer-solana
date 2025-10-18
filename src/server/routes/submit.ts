@@ -33,13 +33,10 @@ function le32(x: any): Buffer {
   return b;
 }
 function encG1(p: any): Buffer {
-  // accept [x,y,*] or {x,y}
   const arr = Array.isArray(p) ? p : [p.x, p.y];
   return Buffer.concat([le32(arr[0]), le32(arr[1])]);
 }
 function encG2(p: any): Buffer {
-  // IMPORTANT: keep pairs **as they come** (this matches your working converter)
-  // Accept [[x0,x1],[y0,y1]] or flat [x0,x1,y0,y1] or {x:[..],y:[..]}
   let x0, x1, y0, y1;
   if (Array.isArray(p)) {
     if (p.length === 4 && !Array.isArray(p[0])) {
@@ -77,9 +74,13 @@ function hexLE32(buf: Buffer): string {
 
 export const submit = Router();
 
-/* -------------------- DEPOSIT (existing) -------------------- */
+/* -------------------- DEPOSIT -------------------- */
 
 // POST /api/v1/submit/deposit
+// Optional extras (strings):
+// - sourceOwner: base58
+// - sourceTokenAccount: base58
+// - useDelegate: boolean
 submit.post("/deposit", async (req, res) => {
   const requestId = (req as any).requestId || "";
   try {
@@ -98,11 +99,14 @@ submit.post("/deposit", async (req, res) => {
     const {
       amount,
       tokenMint,
-      proof,            // snarkjs JSON (preferred path)
-      publicSignals,    // array of decimal strings
-      // optional client-provided BIN (we'll still re-derive from JSON if given)
+      proof,
+      publicSignals,
       proofBytes,
       publicInputsBytes,
+      // NEW (optional)
+      sourceOwner,
+      sourceTokenAccount,
+      useDelegate,
     } = req.body || {};
 
     if (!amount || !tokenMint) {
@@ -133,19 +137,27 @@ submit.post("/deposit", async (req, res) => {
       return res.status(400).json({ ok: false, error: "BadPublicsSize", message: `publicInputsBytes must be 224 bytes, got ${publicsBin.length}` });
     }
 
-    // log (example: depositHash at index 5)
     const depHashLE = hexLE32(slice32(publicsBin, 5));
     console.log({
       proofBytes0_32: hexLE32(slice32(proofBin, 0)),
       publics5_hash_hex: depHashLE,
+      sourceOwner,
+      sourceTokenAccount,
+      useDelegate: !!useDelegate,
     });
 
-    const out = await solanaRelayer.submitDepositWithBin({
+    // Pass strings/flags only; tx-manager converts to PublicKey at the edge.
+    const relayerArgs: any = {
       amount: BigInt(amount),
       tokenMint,
       proofBytes: proofBin,
       publicInputsBytes: publicsBin,
-    });
+      source: (sourceOwner || sourceTokenAccount || typeof useDelegate === "boolean")
+        ? { sourceOwner, sourceTokenAccount, useDelegate: !!useDelegate }
+        : undefined,
+    };
+
+    const out = await (solanaRelayer as any).submitDepositWithBin(relayerArgs);
 
     return res.json({ ok: true, signature: out.signature });
   } catch (e: any) {
@@ -158,13 +170,11 @@ submit.post("/deposit", async (req, res) => {
   }
 });
 
-/* -------------------- TRANSFER (new) -------------------- */
+/* -------------------- TRANSFER -------------------- */
 
-// Publics layout (mirror your Anchor test):
-// 0 OUT1, 1 OUT2, 2 NULLIFIER, 3 MERKLE_ROOT, 4 NEW_ROOT1, 5 NEW_ROOT2, 6 NEW_NEXT_IDX, 7 ENC1, 8 ENC2
+// Publics: 0 OUT1, 1 OUT2, 2 NULLIFIER, 3 MERKLE_ROOT, 4 NEW_ROOT1, 5 NEW_ROOT2, 6 NEW_NEXT_IDX, 7 ENC1, 8 ENC2
 const PS = { OUT1:0, OUT2:1, NULLIFIER:2, MERKLE_ROOT:3, NEW_ROOT1:4, NEW_ROOT2:5, NEW_NEXT_IDX:6, ENC1:7, ENC2:8 } as const;
 
-// POST /api/v1/submit/transfer
 submit.post("/transfer", async (req, res) => {
   const requestId = (req as any).requestId || "";
   try {
@@ -182,14 +192,10 @@ submit.post("/transfer", async (req, res) => {
 
     const {
       tokenMint,
-      proof,             // snarkjs JSON (preferred)
-      publicSignals,     // array of decimal strings
-      // alternatively BIN:
+      proof,
+      publicSignals,
       proofBytes,
       publicInputsBytes,
-      // optional explicit pubs (hex/dec) — we don't require them if proof/publicSignals present
-      out1Commitment, out2Commitment, nullifier, oldMerkleRoot,
-      newMerkleRoot1, newMerkleRoot2, newNextLeafIndex,
     } = req.body || {};
 
     if (!tokenMint) {
@@ -220,7 +226,6 @@ submit.post("/transfer", async (req, res) => {
       return res.status(400).json({ ok: false, error: "BadPublicsSize", message: `publicInputsBytes must be 288 bytes, got ${publicsBin.length}` });
     }
 
-    // Quick logs matching your Anchor test expectations (all LE hex):
     const nullifierLE   = hexLE32(slice32(publicsBin, PS.NULLIFIER));
     const spentRootLE   = hexLE32(slice32(publicsBin, PS.MERKLE_ROOT));
     const newRoot1LE    = hexLE32(slice32(publicsBin, PS.NEW_ROOT1));
@@ -233,7 +238,6 @@ submit.post("/transfer", async (req, res) => {
       new_root2_hex: newRoot2LE,
     });
 
-    // Relay to Solana (BIN path). Your relayer should mirror deposit’s BIN flow.
     const out = await solanaRelayer.submitTransferWithBin({
       tokenMint,
       proofBytes: proofBin,
@@ -251,13 +255,15 @@ submit.post("/transfer", async (req, res) => {
   }
 });
 
-/* -------------------- WITHDRAW (new) -------------------- */
+/* -------------------- WITHDRAW -------------------- */
 
-// Public signals order (withdraw circuit):
-// ["nullifier","merkleRoot","recipientWalletPubKey","amount","tokenId"]
+// Public signals (withdraw): ["nullifier","merkleRoot","recipientWalletPubKey","amount","tokenId"]
 const W_PS = { NULLIFIER:0, MERKLE_ROOT:1, RECIPIENT_PK:2, AMOUNT:3, TOKEN_ID:4 } as const;
 
 // POST /api/v1/submit/withdraw
+// Optional extras (strings):
+// - recipientOwner: base58
+// - recipientTokenAccount: base58
 submit.post("/withdraw", async (req, res) => {
   const requestId = (req as any).requestId || "";
   try {
@@ -275,13 +281,13 @@ submit.post("/withdraw", async (req, res) => {
 
     const {
       tokenMint,
-      proof,             // snarkjs JSON (preferred)
-      publicSignals,     // array of decimal strings (len 5)
-      // alternatively BIN:
+      proof,
+      publicSignals,
       proofBytes,
       publicInputsBytes,
-      // optional explicit pubs (for logs/diagnostics)
-      nullifier, oldMerkleRoot, recipientWalletPubKey, amount, tokenId,
+      // NEW (optional)
+      recipientOwner,
+      recipientTokenAccount,
     } = req.body || {};
 
     if (!tokenMint) {
@@ -321,22 +327,27 @@ submit.post("/withdraw", async (req, res) => {
       });
     }
 
-    // Helpful logs (LE hex like other routes)
     const nullifierLE = hexLE32(slice32(publicsBin, W_PS.NULLIFIER));
     const rootLE      = hexLE32(slice32(publicsBin, W_PS.MERKLE_ROOT));
     console.log({
       proofBytes0_32: hexLE32(slice32(proofBin, 0)),
       nullifier_hex: nullifierLE,
       spent_root_hex: rootLE,
-      explicit: { nullifier, oldMerkleRoot, recipientWalletPubKey, amount, tokenId },
+      recipientOwner,
+      recipientTokenAccount,
     });
 
-    // Relay to Solana (BIN path).
-    const out = await solanaRelayer.submitWithdrawWithBin({
+    // Pass strings only; tx-manager converts to PublicKey at the edge.
+    const relayerArgs: any = {
       tokenMint,
       proofBytes: proofBin,
       publicInputsBytes: publicsBin,
-    });
+      target: (recipientOwner || recipientTokenAccount)
+        ? { recipientOwner, recipientTokenAccount }
+        : undefined,
+    };
+
+    const out = await (solanaRelayer as any).submitWithdrawWithBin(relayerArgs);
 
     return res.json({ ok: true, signature: out.signature });
   } catch (e: any) {
