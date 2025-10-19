@@ -20,10 +20,7 @@ type AnyIdl = Record<string, any>;
 const TREE_ID = Number(process.env.MERKLE_TREE_ID ?? 1);
 const DEBUG_EVENTS = process.env.RELAYER_EVENT_DEBUG !== "0"; // default ON unless explicitly "0"
 
-/* ---------- optional comparisons via env ----------
-PUBLICS_LE: 7 comma-separated 64-hex strings (LE per slot)
-ROOTS_BE:   2 comma-separated 64-hex strings (BE: old,new)
---------------------------------------------------- */
+/* ---------- optional comparisons via env ---------- */
 const PUBLICS_LE_RAW = (process.env.PUBLICS_LE || "")
   .split(",").map((s) => s.trim()).filter(Boolean);
 const ROOTS_BE_RAW = (process.env.ROOTS_BE || "")
@@ -66,14 +63,12 @@ export type DepositBinArgs = {
   publicInputsBytes: Buffer; // 7*32 bytes
 };
 
-/** NEW: transfer args (9*32 public inputs) */
 export type TransferBinArgs = {
   tokenMint: string;         // base58
   proofBytes: Buffer;        // 256 bytes
   publicInputsBytes: Buffer; // 9*32 bytes
 };
 
-/** NEW: withdraw args (5*32 public inputs) */
 export type WithdrawBinArgs = {
   tokenMint: string;         // base58
   proofBytes: Buffer;        // 256 bytes
@@ -81,11 +76,8 @@ export type WithdrawBinArgs = {
 };
 
 type SubmitWithinOpts = {
-  /** Max wall time for one attempt (ms). Default 25_000 */
   timeoutMs?: number;
-  /** Number of retries after the first attempt (0 = no retries). Default 1 */
   retries?: number;
-  /** Called before each attempt (attempt is 1-based). */
   onAttempt?: (attempt: number) => void | Promise<void>;
 };
 
@@ -123,11 +115,44 @@ const mustPick = (obj: any, labels: string[], ctx: string) => {
   }
   return v;
 };
+
 const normalizeMint = (m: any): string => {
   if (m?.toBase58) return m.toBase58();
   if (m instanceof web3.PublicKey) return m.toBase58();
   if (typeof m === "string") return m;
   return new web3.PublicKey(m).toBase58();
+};
+
+// ✅ robust byte converters — never pass PublicKey straight to Buffer.from
+const isBN = (v: any): v is anchor.BN => !!v && typeof v === "object" && typeof v.toArray === "function";
+const toBytes = (v: any): Uint8Array => {
+  if (!v) return new Uint8Array();
+  if (v instanceof Uint8Array) return v;
+  if (Buffer.isBuffer(v)) return new Uint8Array(v);
+  if (Array.isArray(v)) return Uint8Array.from(v);
+  if (v instanceof web3.PublicKey) return v.toBytes();
+  if (isBN(v)) return Uint8Array.from(v.toArray("le"));
+  if (typeof v === "bigint") {
+    const out = Buffer.alloc(32);
+    let x = v;
+    for (let i = 0; i < 32; i++) { out[i] = Number(x & 0xffn); x >>= 8n; }
+    return out;
+  }
+  if (typeof v === "string") {
+    const s = v.trim();
+    // try hex else base58 else utf8
+    if (/^[0-9a-f]+$/i.test(s) && s.length % 2 === 0) return Buffer.from(s, "hex");
+    try { return new web3.PublicKey(s).toBytes(); } catch {/* not base58 */}
+    return Buffer.from(s, "utf8");
+  }
+  return Uint8Array.from(v as any); // last resort for number[]-like
+};
+const toBuf32 = (v: any): Buffer => {
+  const b = Buffer.from(toBytes(v));
+  if (b.length !== 32) {
+    throw new Error(`expected 32 bytes, got ${b.length}`);
+  }
+  return b;
 };
 
 /* Accept both snake_case and camelCase for every field */
@@ -155,21 +180,25 @@ const XFER_MAP = {
   mint: ["mint"],
 };
 
+/* Accept both snake_case and camelCase for WithdrawCompleted */
+const WD_MAP = {
+  nullifier: ["nullifier", "nf", "nf32"],
+  old_merkle_root: ["merkle_root_used", "merkleRootUsed", "old_merkle_root", "oldMerkleRoot"],
+  recipient_wallet_pubkey: ["recipient", "recipientWalletPubKey", "recipient_wallet_pubkey"],
+  amount: ["amount"],
+  mint: ["mint"],
+};
+
+/* --------- Event payload normalizers (PublicKey-safe) --------- */
+
 const toPayload = (raw: any): DepositCompletedEvent => {
-  const deposit_hash = mustPick(raw, MAP.deposit_hash, "deposit_hash") as Uint8Array;
-  const owner_cipherpay_pubkey = mustPick(raw, MAP.owner_cipherpay_pubkey, "owner_cipherpay_pubkey") as Uint8Array;
-  const commitment = mustPick(raw, MAP.commitment, "commitment") as Uint8Array;
-  const old_merkle_root = mustPick(raw, MAP.old_merkle_root, "old_merkle_root") as Uint8Array;
-  const new_merkle_root = mustPick(raw, MAP.new_merkle_root, "new_merkle_root") as Uint8Array;
+  const deposit_hash = toBuf32(mustPick(raw, MAP.deposit_hash, "deposit_hash"));
+  const owner_cipherpay_pubkey = toBuf32(mustPick(raw, MAP.owner_cipherpay_pubkey, "owner_cipherpay_pubkey"));
+  const commitment = toBuf32(mustPick(raw, MAP.commitment, "commitment"));
+  const old_merkle_root = toBuf32(mustPick(raw, MAP.old_merkle_root, "old_merkle_root"));
+  const new_merkle_root = toBuf32(mustPick(raw, MAP.new_merkle_root, "new_merkle_root"));
   const next_leaf_index = Number(mustPick(raw, MAP.next_leaf_index, "next_leaf_index"));
   const mintRaw = mustPick(raw, MAP.mint, "mint");
-
-  // length sanity
-  if (Buffer.from(commitment).length !== 32
-   || Buffer.from(old_merkle_root).length !== 32
-   || Buffer.from(new_merkle_root).length !== 32) {
-    throw new Error("event bytes wrong length (expected 32)");
-  }
 
   return {
     deposit_hash,
@@ -183,27 +212,17 @@ const toPayload = (raw: any): DepositCompletedEvent => {
 };
 
 const toTransferPayload = (raw: any): TransferCompletedEvent => {
-  const nullifier = mustPick(raw, XFER_MAP.nullifier, "nullifier") as Uint8Array;
-  const out1_commitment = mustPick(raw, XFER_MAP.out1_commitment, "out1_commitment") as Uint8Array;
-  const out2_commitment = mustPick(raw, XFER_MAP.out2_commitment, "out2_commitment") as Uint8Array;
-  const enc_note1_hash = mustPick(raw, XFER_MAP.enc_note1_hash, "enc_note1_hash") as Uint8Array;
-  const enc_note2_hash = mustPick(raw, XFER_MAP.enc_note2_hash, "enc_note2_hash") as Uint8Array;
-  const old_merkle_root = mustPick(raw, XFER_MAP.old_merkle_root, "old_merkle_root") as Uint8Array;
-  const new_merkle_root1 = mustPick(raw, XFER_MAP.new_merkle_root1, "new_merkle_root1") as Uint8Array;
-  const new_merkle_root2 = mustPick(raw, XFER_MAP.new_merkle_root2, "new_merkle_root2") as Uint8Array;
+  const nullifier = toBuf32(mustPick(raw, XFER_MAP.nullifier, "nullifier"));
+  const out1_commitment = toBuf32(mustPick(raw, XFER_MAP.out1_commitment, "out1_commitment"));
+  const out2_commitment = toBuf32(mustPick(raw, XFER_MAP.out2_commitment, "out2_commitment"));
+  const enc_note1_hash = toBuf32(mustPick(raw, XFER_MAP.enc_note1_hash, "enc_note1_hash"));
+  const enc_note2_hash = toBuf32(mustPick(raw, XFER_MAP.enc_note2_hash, "enc_note2_hash"));
+  const old_merkle_root = toBuf32(mustPick(raw, XFER_MAP.old_merkle_root, "old_merkle_root"));
+  const new_merkle_root1 = toBuf32(mustPick(raw, XFER_MAP.new_merkle_root1, "new_merkle_root1"));
+  const new_merkle_root2 = toBuf32(mustPick(raw, XFER_MAP.new_merkle_root2, "new_merkle_root2"));
   const next_leaf_index = Number(mustPick(raw, XFER_MAP.next_leaf_index, "next_leaf_index"));
   const mintRaw = mustPick(raw, XFER_MAP.mint, "mint");
 
-  // quick length checks on all 32B fields
-  for (const [label, val] of Object.entries({
-    nullifier, out1_commitment, out2_commitment,
-    enc_note1_hash, enc_note2_hash,
-    old_merkle_root, new_merkle_root1, new_merkle_root2,
-  })) {
-    if (Buffer.from(val as Uint8Array).length !== 32) {
-      throw new Error(`transfer event bytes wrong length for ${label} (expected 32)`);
-    }
-  }
   return {
     nullifier,
     out1_commitment,
@@ -218,46 +237,35 @@ const toTransferPayload = (raw: any): TransferCompletedEvent => {
   };
 };
 
-/* Accept both snake_case and camelCase for WithdrawCompleted */
-const WD_MAP = {
-  nullifier: ["nullifier", "nf", "nf32"],
-  old_merkle_root: ["merkle_root_used", "merkleRootUsed"],
-  recipient_wallet_pubkey: ["recipient", "recipientWalletPubKey"],
-  amount: ["amount"],
-  mint: ["mint"],
-};
-
 const toWithdrawPayload = (raw: any): WithdrawCompletedEvent => {
-  const nullifier = mustPick(raw, WD_MAP.nullifier, "nullifier") as Uint8Array;
-  const old_merkle_root = mustPick(raw, WD_MAP.old_merkle_root, "old_merkle_root") as Uint8Array;
+  const nullifier = toBuf32(mustPick(raw, WD_MAP.nullifier, "nullifier"));
+  const old_merkle_root = toBuf32(mustPick(raw, WD_MAP.old_merkle_root, "old_merkle_root"));
 
-  // optional fields — some programs emit them, some don’t
-  const recipient_wallet_pubkey = pick(raw, WD_MAP.recipient_wallet_pubkey) as Uint8Array | undefined;
-  const amount = pick(raw, WD_MAP.amount) as Uint8Array | undefined;
+  // optional fields — normalize if present
+  const recipRaw = pick(raw, WD_MAP.recipient_wallet_pubkey);
+  const amtRaw = pick(raw, WD_MAP.amount);
   const mintRaw = pick(raw, WD_MAP.mint);
 
-  // minimal length checks
-  for (const [label, val] of Object.entries({ nullifier, old_merkle_root })) {
-    if (Buffer.from(val as Uint8Array).length !== 32) {
-      throw new Error(`withdraw event bytes wrong length for ${label} (expected 32)`);
-    }
-  }
-  if (recipient_wallet_pubkey && Buffer.from(recipient_wallet_pubkey).length !== 32) {
-    throw new Error(`withdraw event bytes wrong length for recipient_wallet_pubkey (expected 32)`);
-  }
-  if (amount && Buffer.from(amount).length !== 32) {
-    throw new Error(`withdraw event bytes wrong length for amount (expected 32)`);
-  }
+  const recipient_wallet_pubkey =
+    recipRaw != null ? toBuf32(recipRaw) : undefined;
+
+  const amount =
+    amtRaw != null
+      ? (Buffer.isBuffer(amtRaw) || amtRaw instanceof Uint8Array
+          ? Buffer.from(amtRaw)
+          : isBN(amtRaw)
+            ? Buffer.from((amtRaw as anchor.BN).toArray("le", 32))
+            : toBuf32(amtRaw))
+      : undefined;
 
   return {
     nullifier,
     old_merkle_root,
     recipient_wallet_pubkey,
     amount,
-    mint: mintRaw ? normalizeMint(mintRaw) : "", // optional
+    mint: mintRaw ? normalizeMint(mintRaw) : "",
   };
 };
-
 
 /* Pretty debug block comparing BE/LE + decimal and optional env references */
 async function debugEventBlock(store: MySqlMerkleStore, ev: DepositCompletedEvent) {
@@ -267,14 +275,12 @@ async function debugEventBlock(store: MySqlMerkleStore, ev: DepositCompletedEven
   const or = Buffer.from(ev.old_merkle_root);
   const nr = Buffer.from(ev.new_merkle_root);
 
-  // DB root (LE) snapshot
   let dbRootLE = "";
   try {
     const rootBuf = await store.getRoot(TREE_ID);
     dbRootLE = hex(rootBuf);
   } catch {/* ignore */}
 
-  // Prepare PUBLICS (LE) lookup tables (hex + decimal)
   const pubsLE = PUBLICS_LE_RAW.map(pad64);
   type SlotInfo = { slot: number; le_hex: string; le_decimal: string };
   const pubsSlots: SlotInfo[] = pubsLE.map((h, i) => {
@@ -282,13 +288,11 @@ async function debugEventBlock(store: MySqlMerkleStore, ev: DepositCompletedEven
     return { slot: i, le_hex: h, le_decimal: le32ToBig(buf).toString() };
   });
 
-  // Which PUBLICS slot matches event commitment by LE-hex / LE-decimal?
-  const eventCommitLEHex = hex(c);               // LE hex (leaf & DB-style)
+  const eventCommitLEHex = hex(c);
   const eventCommitLEDec = le32ToBig(c).toString();
   const matchIdxHex = pubsSlots.findIndex(s => s.le_hex === eventCommitLEHex);
   const matchIdxDec = pubsSlots.findIndex(s => s.le_decimal === eventCommitLEDec);
 
-  // ROOTS_BE comparisons (if provided)
   const rootsBE = ROOTS_BE_RAW.map(pad64);
   const rootOldBE = hex(viewBE(or));
   const rootNewBE = hex(viewBE(nr));
@@ -297,9 +301,9 @@ async function debugEventBlock(store: MySqlMerkleStore, ev: DepositCompletedEven
 
   console.log("\n[events:debug] DepositCompleted (byte views + comparisons)", {
     commitment: {
-      raw_as_LE_hex: eventCommitLEHex,              // should match DB leaf hex
+      raw_as_LE_hex: eventCommitLEHex,
       as_BE_hex:     hex(viewLE(c)),
-      le_decimal:    eventCommitLEDec,              // matches publicSignals slot (decimal)
+      le_decimal:    eventCommitLEDec,
     },
     old_merkle_root: {
       raw_as_BE_hex: hex(viewBE(or)),
@@ -316,9 +320,9 @@ async function debugEventBlock(store: MySqlMerkleStore, ev: DepositCompletedEven
     db: { treeId: TREE_ID, current_root_LE_hex: dbRootLE },
     compare: {
       PUBLICS_LE_present: pubsSlots.length === 7,
-      PUBLICS_LE_slots: pubsSlots,                // each slot hex+decimal (LE)
-      PUBLICS_LE_match_slotIndex_by_hex: matchIdxHex, // -1 if not found
-      PUBLICS_LE_match_slotIndex_by_decimal: matchIdxDec, // -1 if not found
+      PUBLICS_LE_slots: pubsSlots,
+      PUBLICS_LE_match_slotIndex_by_hex: matchIdxHex,
+      PUBLICS_LE_match_slotIndex_by_decimal: matchIdxDec,
       ROOTS_BE_present: rootsBE.length === 2,
       ROOTS_BE_match: rootsBE.length === 2 ? {
         provided_old_be: rootsBE[0],
@@ -354,7 +358,6 @@ class SolanaRelayer {
     });
   }
 
-  /** Submit a shielded deposit using raw proof/public input binaries. */
   async submitDepositWithBin(args: DepositBinArgs) {
     const mint = new web3.PublicKey(args.tokenMint);
     const sig = await this.txm.submitShieldedDepositAtomicBytes({
@@ -366,9 +369,6 @@ class SolanaRelayer {
     return { signature: sig };
   }
 
-  /**
-   * Submit a shielded deposit but enforce a wall-time budget and optional retries.
-   */
   async submitDepositWithin(
     args: DepositBinArgs,
     opts: SubmitWithinOpts = {}
@@ -378,46 +378,33 @@ class SolanaRelayer {
 
     const attemptOnce = async (attempt: number) => {
       await opts.onAttempt?.(attempt);
-
       const to = new Promise<never>((_, rej) => {
         const t = setTimeout(() => {
           clearTimeout(t);
           rej(new Error(`submitDepositWithin: attempt ${attempt} timed out after ${timeoutMs} ms`));
         }, timeoutMs);
       });
-
-      return Promise.race([
-        this.submitDepositWithBin(args),
-        to,
-      ]) as Promise<{ signature: string }>;
+      return Promise.race([this.submitDepositWithBin(args), to]) as Promise<{ signature: string }>;
     };
 
     let lastErr: unknown = null;
     for (let i = 1; i <= 1 + retries; i++) {
-      try {
-        return await attemptOnce(i);
-      } catch (e) {
-        lastErr = e;
-        if (i <= retries) await new Promise((r) => setTimeout(r, 500 * i));
-      }
+      try { return await attemptOnce(i); }
+      catch (e) { lastErr = e; if (i <= retries) await new Promise(r => setTimeout(r, 500 * i)); }
     }
     throw lastErr instanceof Error ? lastErr : new Error(String(lastErr));
   }
 
-  /** 🔹 NEW: submit a shielded transfer using raw proof/public input binaries. */
   async submitTransferWithBin(args: TransferBinArgs) {
     const mint = new web3.PublicKey(args.tokenMint);
-    // TxManager is expected to mirror the deposit path with a transfer variant.
-    // Name chosen to be parallel to submitShieldedDepositAtomicBytes.
     const sig = await this.txm.submitShieldedTransferAtomicBytes({
       mint,
       proofBytes: args.proofBytes,
-      publicInputsBytes: args.publicInputsBytes, // 9*32
+      publicInputsBytes: args.publicInputsBytes,
     });
     return { signature: sig };
   }
 
-  /** 🔹 NEW: transfer with timeout/retries (optional helper). */
   async submitTransferWithin(
     args: TransferBinArgs,
     opts: SubmitWithinOpts = {}
@@ -427,44 +414,33 @@ class SolanaRelayer {
 
     const attemptOnce = async (attempt: number) => {
       await opts.onAttempt?.(attempt);
-
       const to = new Promise<never>((_, rej) => {
         const t = setTimeout(() => {
           clearTimeout(t);
           rej(new Error(`submitTransferWithin: attempt ${attempt} timed out after ${timeoutMs} ms`));
         }, timeoutMs);
       });
-
-      return Promise.race([
-        this.submitTransferWithBin(args),
-        to,
-      ]) as Promise<{ signature: string }>;
+      return Promise.race([this.submitTransferWithBin(args), to]) as Promise<{ signature: string }>;
     };
 
     let lastErr: unknown = null;
     for (let i = 1; i <= 1 + retries; i++) {
-      try {
-        return await attemptOnce(i);
-      } catch (e) {
-        lastErr = e;
-        if (i <= retries) await new Promise((r) => setTimeout(r, 500 * i));
-      }
+      try { return await attemptOnce(i); }
+      catch (e) { lastErr = e; if (i <= retries) await new Promise(r => setTimeout(r, 500 * i)); }
     }
     throw lastErr instanceof Error ? lastErr : new Error(String(lastErr));
   }
 
-  /** NEW: submit a shielded withdraw using raw proof/public input binaries. */
   async submitWithdrawWithBin(args: WithdrawBinArgs) {
     const mint = new web3.PublicKey(args.tokenMint);
     const sig = await this.txm.submitShieldedWithdrawAtomicBytes({
       mint,
       proofBytes: args.proofBytes,
-      publicInputsBytes: args.publicInputsBytes, // 5*32
+      publicInputsBytes: args.publicInputsBytes,
     });
     return { signature: sig };
   }
 
-  /** NEW: withdraw with timeout/retries (optional helper). */
   async submitWithdrawWithin(
     args: WithdrawBinArgs,
     opts: SubmitWithinOpts = {}
@@ -474,28 +450,19 @@ class SolanaRelayer {
 
     const attemptOnce = async (attempt: number) => {
       await opts.onAttempt?.(attempt);
-
       const to = new Promise<never>((_, rej) => {
         const t = setTimeout(() => {
           clearTimeout(t);
           rej(new Error(`submitWithdrawWithin: attempt ${attempt} timed out after ${timeoutMs} ms`));
         }, timeoutMs);
       });
-
-      return Promise.race([
-        this.submitWithdrawWithBin(args),
-        to,
-      ]) as Promise<{ signature: string }>;
+      return Promise.race([this.submitWithdrawWithBin(args), to]) as Promise<{ signature: string }>;
     };
 
     let lastErr: unknown = null;
     for (let i = 1; i <= 1 + retries; i++) {
-      try {
-        return await attemptOnce(i);
-      } catch (e) {
-        lastErr = e;
-        if (i <= retries) await new Promise((r) => setTimeout(r, 500 * i));
-      }
+      try { return await attemptOnce(i); }
+      catch (e) { lastErr = e; if (i <= retries) await new Promise(r => setTimeout(r, 500 * i)); }
     }
     throw lastErr instanceof Error ? lastErr : new Error(String(lastErr));
   }
@@ -523,10 +490,7 @@ class SolanaRelayer {
             for (const ev of parser.parseLogs(l.logs) ?? []) {
               if (ev.name === "depositCompleted" || ev.name === "DepositCompleted") {
                 const payload = toPayload(ev.data);
-
-                // 🔎 verbose mapping (hex + decimal + comparisons)
                 await debugEventBlock(this.store!, payload);
-
                 await this.store!.recordDepositCompleted(TREE_ID, payload);
                 console.info("[events] DepositCompleted persisted from onLogs", {
                   leafIndex: payload.next_leaf_index,
@@ -541,7 +505,6 @@ class SolanaRelayer {
                 });
               } else if (ev.name === "withdrawCompleted" || ev.name === "WithdrawCompleted") {
                 const payload = toWithdrawPayload(ev.data);
-                // No Merkle mutation to persist; keep an optional hook for auditing/metrics
                 try {
                   await this.store!.recordWithdrawCompleted?.(TREE_ID, payload);
                 } catch (e: any) {
@@ -553,7 +516,6 @@ class SolanaRelayer {
                   old_root_BE_hex: hex(viewBE(payload.old_merkle_root)),
                 });
               }
-              
             }
           } catch (e: any) {
             console.error("[onLogs] parse/persist error:", e?.message || e);
@@ -571,10 +533,7 @@ class SolanaRelayer {
         async (ev: any, slot: number, sig?: string) => {
           try {
             const payload = toPayload(ev);
-
-            // 🔎 verbose mapping (hex + decimal + comparisons)
             await debugEventBlock(this.store!, payload);
-
             await this.store!.recordDepositCompleted(TREE_ID, payload);
             console.info("[events] DepositCompleted persisted (anchor listener)", { slot, sig });
           } catch (e: any) {
