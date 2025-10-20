@@ -7,6 +7,7 @@ import path from "node:path";
 import { makeAuthMiddleware } from "@/auth/index.js";
 import { prepareRouter } from "@/server/routes/prepare.js";
 import { submit } from "@/server/routes/submit.js";
+import relayerInfo from "@/server/routes/relayer-info.js";
 import { CanonicalTree } from "@/services/merkle/canonical-tree.js";
 import { getPool } from "@/services/db/mysql.js";
 import { loadEnv, isDashboardAuthEnabled } from "@/services/config/env.js";
@@ -79,6 +80,7 @@ export async function makeServer() {
 
   // protected business APIs
   app.use(makeAuthMiddleware());
+  app.use("/api/v1/relayer", relayerInfo);
   app.use("/api/v1/prepare", prepareRouter(tree));
   app.use("/api/v1/submit", submit);
 

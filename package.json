@@ -17,8 +17,11 @@
     "test:mysql": "node --experimental-vm-modules node_modules/jest/bin/jest.js tests/merkle/mysql-merkle-store.test.ts",
 
     "test:e2e:deposit": "vitest run tests/e2e/deposit/deposit.test.ts",
+    "test:e2e:depositata": "vitest run tests/e2e/deposit/depositata.test.ts",
     "test:e2e:transfer": "vitest run tests/e2e/transfer/transfer.test.ts",
-    "test:e2e:withdraw": "vitest run tests/e2e/withdraw/withdraw.test.ts"
+    "test:e2e:transferata": "vitest run tests/e2e/transfer/transfer.test.ts",
+    "test:e2e:withdraw": "vitest run tests/e2e/withdraw/withdraw.test.ts",
+    "test:e2e:withdrawata": "vitest run tests/e2e/withdraw/withdrawata.test.ts"
   },
   "dependencies": {
     "@coral-xyz/anchor": "^0.31.1",
