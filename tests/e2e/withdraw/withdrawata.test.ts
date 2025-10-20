@@ -1,13 +1,24 @@
-/* tests/e2e/withdraw/withdraw.test.ts */
+/* tests/e2e/withdraw/withdrawata.test.ts */
 import { describe, it, expect, beforeAll } from "vitest";
 import fs from "node:fs";
 import path from "node:path";
 import crypto from "node:crypto";
 import { fileURLToPath } from "node:url";
-import dotenv from "dotenv";
 import util from "node:util";
+import dotenv from "dotenv";
 
-// Poseidon (BN254) — same H used by deposit/transfer tests (variadic)
+/* Solana + SPL for recipient ATA setup */
+import {
+  Connection,
+  Keypair,
+  PublicKey,
+  LAMPORTS_PER_SOL,
+} from "@solana/web3.js";
+import {
+  getOrCreateAssociatedTokenAccount,
+} from "@solana/spl-token";
+
+/* Poseidon (BN254) — same H used by other tests (variadic) */
 import { H } from "@/services/merkle/poseidon.js";
 
 dotenv.config();
@@ -15,7 +26,6 @@ dotenv.config();
 /* ------------------------------------------------------------------ */
 /* Constants & wiring                                                 */
 /* ------------------------------------------------------------------ */
-
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
@@ -24,13 +34,7 @@ const AUTH_TOKEN = process.env.DASHBOARD_TOKEN || process.env.API_TOKEN || "supe
 const HMAC_KEY_ID = process.env.API_KEY_ID || "";
 const HMAC_SECRET = process.env.API_KEY_SECRET || "";
 
-// SPL mint (matches other e2e tests)
-const MINT_ADDRESS =
-  process.env.TEST_MINT ||
-  process.env.USDC_MINT ||
-  "So11111111111111111111111111111111111111112"; // wSOL default
-
-// proofs/withdraw paths
+/* proofs/withdraw paths */
 const PROOFS_DIR = process.env.WITHDRAW_PROOFS_DIR
   ? path.resolve(process.env.WITHDRAW_PROOFS_DIR)
   : path.resolve(__dirname, "./proof");
@@ -42,21 +46,34 @@ const EXAMPLE_INPUT = fs.existsSync(path.join(PROOFS_DIR, "example_withdraw_inpu
 const WASM_PATH = process.env.WITHDRAW_WASM || path.join(PROOFS_DIR, "withdraw.wasm");
 const ZKEY_PATH = process.env.WITHDRAW_ZKEY || path.join(PROOFS_DIR, "withdraw_final.zkey");
 
-// BN254
+/* Chain connection & wallet (client) */
+const RPC_URL =
+  process.env.SOLANA_URL ||
+  process.env.ANCHOR_PROVIDER_URL ||
+  "http://127.0.0.1:8899";
+const KEYPAIR_PATH =
+  process.env.ANCHOR_WALLET ||
+  `${process.env.HOME}/.config/solana/id.json`;
+
+/* SPL mint (matches other e2e tests) */
+const MINT_ADDRESS =
+  process.env.TEST_MINT ||
+  process.env.USDC_MINT ||
+  "So11111111111111111111111111111111111111112"; // wSOL default
+
+/* BN254 */
 const FQ =
   21888242871839275222246405745257275088548364400416034343698204186575808495617n;
 
 /* ------------------------------------------------------------------ */
-/* Helpers (shared style with deposit/transfer)                        */
+/* Helpers                                                            */
 /* ------------------------------------------------------------------ */
-
 const modF = (x: bigint) => ((x % FQ) + FQ) % FQ;
 /** WITHDRAW_INDEX → field element (mod FQ) */
 function feFromWithdrawIndex(): bigint {
   const idx = Number(process.env.WITHDRAW_INDEX ?? "0");
   return BigInt(idx) % FQ;
 }
-
 function hasArtifacts(): boolean {
   return fs.existsSync(WASM_PATH) && fs.existsSync(ZKEY_PATH);
 }
@@ -81,7 +98,6 @@ async function httpJson<T>(url: string, body: any): Promise<T> {
   }
   return (await res.json()) as T;
 }
-
 function normalizeHex(h: string) {
   return (h.startsWith("0x") ? h.slice(2) : h).toLowerCase();
 }
@@ -92,8 +108,6 @@ function fromHexToBigBE(s: string): bigint {
   const t = s.startsWith("0x") ? s.slice(2) : s;
   return BigInt("0x" + t) % FQ;
 }
-
-/** 0x-only normalizer (don’t corrupt decimal strings) */
 function toDecimalIfHex(x: any): any {
   if (typeof x === "string") {
     const s = x.trim();
@@ -130,9 +144,7 @@ async function computeRootFromLeafBE(
   return cur;
 }
 
-/* ------------------------------------------------------------------ */
-/* Public signals order (withdraw circuit)                            */
-/*   ["nullifier","merkleRoot","recipientWalletPubKey","amount","tokenId"] */
+/* Public signals order (withdraw circuit) */
 const PS = {
   NULLIFIER: 0,
   MERKLE_ROOT: 1,
@@ -142,19 +154,43 @@ const PS = {
 } as const;
 
 /* ------------------------------------------------------------------ */
-/* The test                                                           */
+/* The test: client-specified recipient ATA                           */
 /* ------------------------------------------------------------------ */
+describe("E2E: withdraw via client recipient ATA", () => {
+  // Client wallet + connection
+  const secret = Buffer.from(JSON.parse(fs.readFileSync(KEYPAIR_PATH, "utf8")));
+  const client = Keypair.fromSecretKey(secret);
+  const connection = new Connection(RPC_URL, "confirmed");
 
-describe("E2E: withdraw strict-sync flow (spend out2)", () => {
   let example: any;
+  let recipientOwner: PublicKey;
+  let recipientAta: PublicKey;
+  const mint = new PublicKey(MINT_ADDRESS);
 
   beforeAll(async () => {
+    // Airdrop for fees if needed
+    const bal = await connection.getBalance(client.publicKey);
+    if (bal < 2 * LAMPORTS_PER_SOL) {
+      const sig = await connection.requestAirdrop(client.publicKey, 3 * LAMPORTS_PER_SOL);
+      await connection.confirmTransaction(sig, "confirmed");
+    }
+
+    // Load example withdraw inputs
     const raw = fs.readFileSync(EXAMPLE_INPUT, "utf8");
     example = JSON.parse(raw);
+
+    // Ensure recipient ATA exists (owned by client)
+    recipientOwner = client.publicKey;
+    const ata = await getOrCreateAssociatedTokenAccount(connection, client, mint, recipientOwner);
+    recipientAta = ata.address;
+
+    console.log("[withdraw-ATA] mint:", mint.toBase58());
+    console.log("[withdraw-ATA] recipientOwner:", recipientOwner.toBase58());
+    console.log("[withdraw-ATA] recipientTokenAccount:", recipientAta.toBase58());
   });
 
   it(
-    "prepares, (optionally) proves, and submits a withdraw (spending out2; randomness via WITHDRAW_INDEX)",
+    "prepares, (optionally) proves, and submits a withdraw to client ATA",
     async () => {
       // Inputs follow generate-example-proof.js -> withdraw defaults
       const recipientWalletPubKey  = BigInt(example.recipientWalletPubKey ?? 0);
@@ -163,13 +199,13 @@ describe("E2E: withdraw strict-sync flow (spend out2)", () => {
       const tokenId                = BigInt(example.tokenId ?? 0);
       const memo                   = BigInt(example.memo ?? 0);
 
-      // Randomness comes from WITHDRAW_INDEX (same pattern as DEPOSIT/TRANSFER)
+      // Randomness from WITHDRAW_INDEX (same pattern as DEPOSIT/TRANSFER)
       const randomness = feFromWithdrawIndex();
 
       // CipherPay pubkey = Poseidon2(walletPub, walletPriv)
       const recipientCipherPayPubKey = await H(modF(recipientWalletPubKey), modF(recipientWalletPrivKey));
 
-      // The note we’re spending (this is out2 from transfer pipeline):
+      // The note we’re spending (typically out2):
       const commitment = await H(
         modF(amount),
         modF(recipientCipherPayPubKey),
@@ -188,12 +224,11 @@ describe("E2E: withdraw strict-sync flow (spend out2)", () => {
 
       // 1) Ask the relayer for the strict-sync path to THIS commitment
       type PrepareResp = {
-        merkleRoot: string;       // **BE** hex (32)
-        pathElements: string[];   // **BE** hex bottom→top
-        pathIndices: number[];    // 0/1 bits, LSB-first
-        leafIndex: number;        // index of the out2 leaf
+        merkleRoot: string;     // **BE** hex (32)
+        pathElements: string[]; // **BE** bottom→top
+        pathIndices: number[];  // 0/1 bits, LSB-first
+        leafIndex: number;      // index of the spent leaf
       };
-
       const prep = await httpJson<PrepareResp>(
         `${BASE_URL}/api/v1/prepare/withdraw`,
         { spendCommitment: commitment.toString(10) }
@@ -225,11 +260,8 @@ describe("E2E: withdraw strict-sync flow (spend out2)", () => {
         randomness:             modF(randomness).toString(),
         memo:                   modF(memo).toString(),
 
-        // merkle path for the spent note (BE → decimal strings)
         pathElements:           prep.pathElements.map(h => fromHexToBigBE(h).toString()),
         pathIndices:            prep.pathIndices,
-
-        // private preimage binding for the note being spent
         commitment:             modF(commitment).toString(),
       };
 
@@ -243,10 +275,10 @@ describe("E2E: withdraw strict-sync flow (spend out2)", () => {
           const snarkjs = await import("snarkjs");
           const { groth16 } = snarkjs as any;
 
-        const normalized = toDecimalIfHex(inputSignals);
-        const out = await groth16.fullProve(normalized, WASM_PATH, ZKEY_PATH);
-        proof = out.proof;
-        publicSignals = (out.publicSignals as any[]).map(String);
+          const normalized = toDecimalIfHex(inputSignals);
+          const out = await groth16.fullProve(normalized, WASM_PATH, ZKEY_PATH);
+          proof = out.proof;
+          publicSignals = (out.publicSignals as any[]).map(String);
         } catch (err) {
           console.error("❌ fullProve failed. Inputs were:");
           console.error(util.inspect(inputSignals, { depth: null, colors: true, maxArrayLength: null }));
@@ -254,10 +286,10 @@ describe("E2E: withdraw strict-sync flow (spend out2)", () => {
           throw err;
         }
       } else {
-        console.warn(`[withdraw e2e] Missing ${WASM_PATH} / ${ZKEY_PATH}; skipping local proof.`);
+        console.warn(`[withdraw-ATA e2e] Missing ${WASM_PATH} / ${ZKEY_PATH}; skipping local proof.`);
       }
 
-      // Extra visibility: compare nullifier we recomputed vs the circuit’s PS[0] (when present)
+      // Compare nullifier we recomputed vs the circuit’s PS[0] (when present)
       if (publicSignals.length) {
         const nfHexFromPS = BigInt(publicSignals[PS.NULLIFIER]).toString(16).padStart(64, "0");
         const nfHexLocal  = hex64(nullifier);
@@ -271,11 +303,10 @@ describe("E2E: withdraw strict-sync flow (spend out2)", () => {
       }
 
       // 5) Build submit body (include canonical pubs if we have them)
-      const oldRootHex = normalizeHex(prep.merkleRoot);
       const getHex = (i: number) =>
         publicSignals.length ? BigInt(publicSignals[i]).toString(16).padStart(64, "0") : "";
 
-      const submitBody = {
+      const submitBody: any = {
         operation: "withdraw",
         tokenMint: MINT_ADDRESS,
 
@@ -283,21 +314,27 @@ describe("E2E: withdraw strict-sync flow (spend out2)", () => {
         proof,
         publicSignals,
 
-        // canonical pubs (BE hex)
+        // canonical pubs (BE hex fallback if no publicSignals)
         nullifier:      publicSignals.length ? getHex(PS.NULLIFIER) : hex64(nullifier),
-        oldMerkleRoot:  publicSignals.length ? getHex(PS.MERKLE_ROOT) : oldRootHex,
+        oldMerkleRoot:  publicSignals.length ? getHex(PS.MERKLE_ROOT) : normalizeHex(prep.merkleRoot),
         recipientWalletPubKey: publicSignals.length ? getHex(PS.RECIPIENT_PK) : hex64(recipientWalletPubKey),
         amount:         publicSignals.length ? String(BigInt(publicSignals[PS.AMOUNT])) : String(Number(amount)),
         tokenId:        publicSignals.length ? String(BigInt(publicSignals[PS.TOKEN_ID])) : String(Number(tokenId)),
 
-        // for API bookkeeping (optional but handy)
+        // 👉 client-specified recipient (owner + ATA)
+        recipientOwner: recipientOwner.toBase58(),
+        recipientTokenAccount: recipientAta.toBase58(),
+
+        // Optional bookkeeping
         memo: Number(memo),
       };
 
-      console.log(util.inspect(submitBody, { depth: null, maxArrayLength: null, colors: true }));
+      console.log("\n[submit:withdraw-ATA] body (truncated proof):");
+      const bodyForLog = { ...submitBody, proof: proof ? { ...proof, pi_a: "[...]", pi_b: "[...]", pi_c: "[...]" } : null };
+      console.log(util.inspect(bodyForLog, { depth: null, maxArrayLength: null, colors: true }));
 
       if (!proof) {
-        console.warn("[withdraw e2e] No proof generated. Skipping /submit.");
+        console.warn("[withdraw-ATA e2e] No proof generated. Skipping /submit.");
         return;
       }
 
@@ -306,6 +343,7 @@ describe("E2E: withdraw strict-sync flow (spend out2)", () => {
 
       expect(result).toBeTruthy();
       const sig = (result.signature || result.txSig || result.txid || "").toString();
+      console.log("\n[submit:withdraw-ATA] tx signature:", sig);
       if (sig) expect(sig.length).toBeGreaterThan(20);
       if (typeof result.ok === "boolean") expect(result.ok).toBe(true);
     },

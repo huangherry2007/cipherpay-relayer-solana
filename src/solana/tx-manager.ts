@@ -17,6 +17,7 @@ import {
   getAssociatedTokenAddressSync,
   createSyncNativeInstruction,
   createTransferCheckedInstruction,
+  getAccount,
   getMint,
 } from "@solana/spl-token";
 
@@ -49,28 +50,6 @@ function slice32(buf: Buffer, i: number): Buffer {
 function hexLE32(buf: Buffer): string {
   return Buffer.from(buf).toString("hex");
 }
-function pk(v?: string | PublicKey): PublicKey | undefined {
-  if (!v) return undefined;
-  return typeof v === "string" ? new PublicKey(v) : v;
-}
-
-/** Optional client overrides for deposit source. */
-export type DepositSourceOverride = {
-  /** Base58 or PublicKey of the token owner paying the deposit. Defaults to relayer payer. */
-  sourceOwner?: string | PublicKey;
-  /** Base58 or PublicKey of an explicit source ATA to use (skips creating an ATA). */
-  sourceTokenAccount?: string | PublicKey;
-  /** If true, use a pre-created delegate to move tokens from the source ATA. */
-  useDelegate?: boolean;
-};
-
-/** Optional client overrides for withdraw target. */
-export type WithdrawTargetOverride = {
-  /** Base58 or PublicKey of the recipient owner. Defaults to relayer payer. */
-  recipientOwner?: string | PublicKey;
-  /** Base58 or PublicKey of an explicit recipient ATA to use (skips deriving/creating). */
-  recipientTokenAccount?: string | PublicKey;
-};
 
 export default class TxManager {
   private readonly program: anchor.Program<any>;
@@ -139,68 +118,16 @@ export default class TxManager {
   }
 
   private async buildSetupIxs(
-    sourceOwner: PublicKey,
-    mint: PublicKey,
-    vaultOwnerPda: PublicKey,
-    amount: BN,
-    rootCachePda: PublicKey,
-    explicitSourceAta?: PublicKey
-  ): Promise<{ ixs: TransactionInstruction[]; sourceAta: PublicKey; vaultAta: PublicKey }> {
-    const ixs: TransactionInstruction[] = [];
-
-    const sourceAta =
-      explicitSourceAta ??
-      getAssociatedTokenAddressSync(
-        mint, sourceOwner, false, TOKEN_PROGRAM_ID, ASSOCIATED_TOKEN_PROGRAM_ID
-      );
-
-    const vaultAta = getAssociatedTokenAddressSync(
-      mint, vaultOwnerPda, true, TOKEN_PROGRAM_ID, ASSOCIATED_TOKEN_PROGRAM_ID
-    );
-
-    const initRoot = await this.maybeInitRootCacheIx(rootCachePda, sourceOwner);
-    if (initRoot) ixs.push(initRoot);
-
-    // Only create the derived ATA when we're NOT using an explicit one
-    if (!explicitSourceAta && !(await this.accountExists(sourceAta))) {
-      ixs.push(
-        createAssociatedTokenAccountIdempotentInstruction(
-          sourceOwner, sourceAta, sourceOwner, mint, TOKEN_PROGRAM_ID, ASSOCIATED_TOKEN_PROGRAM_ID
-        )
-      );
-    }
-    if (!(await this.accountExists(vaultAta))) {
-      ixs.push(
-        createAssociatedTokenAccountIdempotentInstruction(
-          sourceOwner, vaultAta, vaultOwnerPda, mint, TOKEN_PROGRAM_ID, ASSOCIATED_TOKEN_PROGRAM_ID
-        )
-      );
-    }
-
-    if (mint.equals(NATIVE_MINT) && amount.gt(new BN(0))) {
-      ixs.push(
-        SystemProgram.transfer({ fromPubkey: sourceOwner, toPubkey: sourceAta, lamports: Number(amount) }),
-        createSyncNativeInstruction(sourceAta)
-      );
-    }
-
-    return { ixs, sourceAta, vaultAta };
-  }
-
-  /** Idempotently ensure root cache + both ATAs (vault & recipient) exist for withdraw. */
-  private async buildWithdrawSetupIxs(
     payer: PublicKey,
     mint: PublicKey,
     vaultOwnerPda: PublicKey,
-    rootCachePda: PublicKey,
-    recipientOwnerOverride?: PublicKey
-  ): Promise<{ ixs: TransactionInstruction[]; recipientAta: PublicKey; recipientOwner: PublicKey; vaultAta: PublicKey }> {
+    amount: BN,
+    rootCachePda: PublicKey
+  ): Promise<{ ixs: TransactionInstruction[]; payerAta: PublicKey; vaultAta: PublicKey }> {
     const ixs: TransactionInstruction[] = [];
 
-    const recipientOwner = recipientOwnerOverride ?? payer;
-
-    const recipientAta = getAssociatedTokenAddressSync(
-      mint, recipientOwner, false, TOKEN_PROGRAM_ID, ASSOCIATED_TOKEN_PROGRAM_ID
+    const payerAta = getAssociatedTokenAddressSync(
+      mint, payer, false, TOKEN_PROGRAM_ID, ASSOCIATED_TOKEN_PROGRAM_ID
     );
     const vaultAta = getAssociatedTokenAddressSync(
       mint, vaultOwnerPda, true, TOKEN_PROGRAM_ID, ASSOCIATED_TOKEN_PROGRAM_ID
@@ -209,10 +136,10 @@ export default class TxManager {
     const initRoot = await this.maybeInitRootCacheIx(rootCachePda, payer);
     if (initRoot) ixs.push(initRoot);
 
-    if (!(await this.accountExists(recipientAta))) {
+    if (!(await this.accountExists(payerAta))) {
       ixs.push(
         createAssociatedTokenAccountIdempotentInstruction(
-          payer, recipientAta, recipientOwner, mint, TOKEN_PROGRAM_ID, ASSOCIATED_TOKEN_PROGRAM_ID
+          payer, payerAta, payer, mint, TOKEN_PROGRAM_ID, ASSOCIATED_TOKEN_PROGRAM_ID
         )
       );
     }
@@ -224,20 +151,69 @@ export default class TxManager {
       );
     }
 
-    return { ixs, recipientAta, recipientOwner, vaultAta };
+    if (mint.equals(NATIVE_MINT) && amount.gt(new BN(0))) {
+      ixs.push(
+        SystemProgram.transfer({ fromPubkey: payer, toPubkey: payerAta, lamports: Number(amount) }),
+        createSyncNativeInstruction(payerAta)
+      );
+    }
+
+    return { ixs, payerAta, vaultAta };
+  }
+
+  /** Idempotently ensure root cache + both ATAs (vault & recipient) exist for withdraw. */
+  private async buildWithdrawSetupIxs(
+    payer: PublicKey,
+    mint: PublicKey,
+    vaultOwnerPda: PublicKey,
+    rootCachePda: PublicKey
+  ): Promise<{ ixs: TransactionInstruction[]; recipientAta: PublicKey; vaultAta: PublicKey }> {
+    const ixs: TransactionInstruction[] = [];
+
+    const recipientAta = getAssociatedTokenAddressSync(
+      mint, payer, false, TOKEN_PROGRAM_ID, ASSOCIATED_TOKEN_PROGRAM_ID
+    );
+    const vaultAta = getAssociatedTokenAddressSync(
+      mint, vaultOwnerPda, true, TOKEN_PROGRAM_ID, ASSOCIATED_TOKEN_PROGRAM_ID
+    );
+
+    const initRoot = await this.maybeInitRootCacheIx(rootCachePda, payer);
+    if (initRoot) ixs.push(initRoot);
+
+    if (!(await this.accountExists(recipientAta))) {
+      ixs.push(
+        createAssociatedTokenAccountIdempotentInstruction(
+          payer, recipientAta, payer, mint, TOKEN_PROGRAM_ID, ASSOCIATED_TOKEN_PROGRAM_ID
+        )
+      );
+    }
+    if (!(await this.accountExists(vaultAta))) {
+      ixs.push(
+        createAssociatedTokenAccountIdempotentInstruction(
+          payer, vaultAta, vaultOwnerPda, mint, TOKEN_PROGRAM_ID, ASSOCIATED_TOKEN_PROGRAM_ID
+        )
+      );
+    }
+
+    return { ixs, recipientAta, vaultAta };
   }
 
   /**
    * Submit deposit with **binary** proof + publics.
-   * publicInputsBytes MUST be 7×32; proofBytes MUST be 256.
-   * Optional `source` overrides (owner/ATA/useDelegate).
+   * Supports two funding modes:
+   *   (A) default: pull from relayer payer ATA
+   *   (B) delegated: pull from client ATA via SPL delegate (source.*)
    */
   async submitShieldedDepositAtomicBytes(args: {
     mint: PublicKey;
     amount: bigint | number | BN;
     proofBytes: Buffer;
     publicInputsBytes: Buffer;
-    source?: DepositSourceOverride;
+    source?: {                       // optional delegate-mode
+      sourceOwner: PublicKey;
+      sourceTokenAccount: PublicKey;
+      useDelegate?: boolean;         // if true => validate delegate + pull from sourceTokenAccount
+    };
   }): Promise<string> {
     const payer = this.provider.wallet.publicKey;
 
@@ -262,35 +238,64 @@ export default class TxManager {
     const vaultOwnerPda = pda([VAULT_SEED], this.programId);
     const depositMarkerPda = pda([DEPOSIT_SEED, depositHashBytes], this.programId);
 
-    // Normalize overrides
-    const srcOwner = pk(args.source?.sourceOwner) ?? payer;
-    const explicitSourceAta = pk(args.source?.sourceTokenAccount);
-    const useDelegate = !!args.source?.useDelegate;
-
     const mintDecimals = await this.getMintDecimals(args.mint);
 
-    // Stage A — setup (creates ATAs if needed unless an explicit source ATA is provided)
-    const { ixs: setupIxs, sourceAta, vaultAta } = await this.buildSetupIxs(
-      srcOwner, args.mint, vaultOwnerPda, amountBN, rootCachePda, explicitSourceAta
+    // Stage A — setup (always ensure vault ATA + root cache)
+    const { ixs: setupIxs, payerAta, vaultAta } = await this.buildSetupIxs(
+      payer, args.mint, vaultOwnerPda, amountBN, rootCachePda
     );
+    // In delegate mode we don't need relayer payer ATA existence, but it's already idempotent.
+
     await this.sendIxs(setupIxs);
 
-    // Stage B — deposit
+    // Stage B — transfer (choose mode)
     const preIxs: TransactionInstruction[] = [];
+
     if (amountBN.gt(new BN(0))) {
-      // If `useDelegate`, caller is responsible for having set a delegate on sourceAta
-      // that the relayer can sign with. Otherwise, we transfer as `srcOwner` (payer in tests).
-      preIxs.push(
-        createTransferCheckedInstruction(
-          sourceAta,
-          args.mint,
-          vaultAta,
-          srcOwner, // authority
-          BigInt(amountBN.toString()),
-          mintDecimals
-        )
-      );
+      if (args.source?.useDelegate) {
+        // Validate client ATA + delegate allowance
+        const srcAcc = await getAccount(this.connection, args.source.sourceTokenAccount, "confirmed");
+        if (!srcAcc.owner.equals(args.source.sourceOwner)) {
+          throw new Error("sourceTokenAccount.owner mismatch with sourceOwner");
+        }
+        if (!srcAcc.mint.equals(args.mint)) {
+          throw new Error("sourceTokenAccount.mint mismatch with tokenMint");
+        }
+        if (!srcAcc.delegate || !srcAcc.delegate.equals(payer)) {
+          throw new Error("sourceTokenAccount.delegate is not the relayer wallet");
+        }
+        const delegated = BigInt(srcAcc.delegatedAmount.toString());
+        if (delegated < BigInt(amountBN.toString())) {
+          throw new Error(`delegatedAmount ${delegated} < required ${amountBN.toString()}`);
+        }
+
+        // Transfer from client's ATA with relayer signing as delegate
+        preIxs.push(
+          createTransferCheckedInstruction(
+            args.source.sourceTokenAccount,
+            args.mint,
+            vaultAta,
+            payer,                              // delegate authority (relayer)
+            BigInt(amountBN.toString()),
+            mintDecimals
+          )
+        );
+      } else {
+        // Default: transfer from relayer payer ATA
+        preIxs.push(
+          createTransferCheckedInstruction(
+            payerAta,
+            args.mint,
+            vaultAta,
+            payer,
+            BigInt(amountBN.toString()),
+            mintDecimals
+          )
+        );
+      }
     }
+
+    // Memo matches anchor test
     preIxs.push(this.memoIxUtf8("deposit:" + depositHashHexLE));
 
     const run = () =>
@@ -324,14 +329,11 @@ export default class TxManager {
     }
   }
 
-  /**
-   * Submit **shielded transfer** with binary proof + 9×32 public inputs.
-   */
   async submitShieldedTransferAtomicBytes(args: {
-    mint: PublicKey;                // accepted but unused by the IX
+    mint: PublicKey;
     proofBytes: Buffer;             // 256 bytes
     publicInputsBytes: Buffer;      // 9*32 bytes
-    computeUnitLimit?: number;      // optional override
+    computeUnitLimit?: number;
   }): Promise<string> {
     const payer = this.provider.wallet.publicKey;
 
@@ -375,16 +377,13 @@ export default class TxManager {
   }
 
   /**
-   * Submit **shielded withdraw** with binary proof + 5×32 public inputs.
-   * Public signals order: [nullifier, merkleRoot, recipientWalletPubKey, amount, tokenId]
-   * Optional target overrides (owner/ATA).
+   * Withdraw (no delegate required). Recipient is the payer by default.
    */
   async submitShieldedWithdrawAtomicBytes(args: {
     mint: PublicKey;
     proofBytes: Buffer;            // 256
     publicInputsBytes: Buffer;     // 5 * 32
     computeUnitLimit?: number;
-    target?: WithdrawTargetOverride;
   }): Promise<string> {
     const payer = this.provider.wallet.publicKey;
 
@@ -402,15 +401,9 @@ export default class TxManager {
     const vaultOwnerPda = pda([VAULT_SEED], this.programId);
     const nullifierPda  = pda([NULLIFIER_SEED, nullifierBuf], this.programId);
 
-    // Normalize overrides
-    const targetOwnerOverride = pk(args.target?.recipientOwner);
-    const explicitTargetAta   = pk(args.target?.recipientTokenAccount);
-
-    // Ensure root_cache + both ATAs (vault & recipient)
-    const { ixs: setupIxs, recipientAta: defaultRecipientAta, recipientOwner, vaultAta } =
-      await this.buildWithdrawSetupIxs(payer, args.mint, vaultOwnerPda, rootCachePda, targetOwnerOverride);
-
-    const recipientAta = explicitTargetAta ?? defaultRecipientAta;
+    const { ixs: setupIxs, recipientAta, vaultAta } = await this.buildWithdrawSetupIxs(
+      payer, args.mint, vaultOwnerPda, rootCachePda
+    );
 
     const cuUnits = Number(process.env.CU_LIMIT ?? 800_000);
     const cuIx    = ComputeBudgetProgram.setComputeUnitLimit({ units: args.computeUnitLimit ?? cuUnits });
@@ -424,7 +417,7 @@ export default class TxManager {
         nullifierRecord: nullifierPda,
         vaultPda: vaultOwnerPda,
         vaultTokenAccount: vaultAta,
-        recipientOwner,                  // always a PublicKey
+        recipientOwner: payer,
         recipientTokenAccount: recipientAta,
         tokenMint: args.mint,
         systemProgram: SystemProgram.programId,
