@@ -27,7 +27,9 @@ const VAULT_SEED = Buffer.from("vault");
 const DEPOSIT_SEED = Buffer.from("deposit");
 const NULLIFIER_SEED = Buffer.from("nullifier");
 
-const MEMO_PROGRAM_ID = new PublicKey("MemoSq4gqABAXKb96qnH8TysNcWxMyWCqXgDLGmfcHr");
+const MEMO_PROGRAM_ID = new PublicKey(
+  "MemoSq4gqABAXKb96qnH8TysNcWxMyWCqXgDLGmfcHr"
+);
 
 type AnchorCtx = {
   program: anchor.Program<any>;
@@ -66,16 +68,22 @@ export default class TxManager {
 
   private async ensurePayerFunds(minLamports = 60_000_000): Promise<void> {
     const payer = this.provider.wallet.publicKey;
-    const bal = await this.connection.getBalance(payer, { commitment: "confirmed" });
+    const bal = await this.connection.getBalance(payer, {
+      commitment: "confirmed",
+    });
     if (bal >= minLamports) return;
 
     const want = Math.max(120_000_000, minLamports * 2);
     const sig = await this.connection.requestAirdrop(payer, want);
     await this.connection.confirmTransaction(sig, "confirmed");
 
-    const bal2 = await this.connection.getBalance(payer, { commitment: "confirmed" });
+    const bal2 = await this.connection.getBalance(payer, {
+      commitment: "confirmed",
+    });
     if (bal2 < minLamports) {
-      throw new Error(`Airdrop failed: balance=${bal2}, needed>=${minLamports}`);
+      throw new Error(
+        `Airdrop failed: balance=${bal2}, needed>=${minLamports}`
+      );
     }
   }
 
@@ -104,7 +112,10 @@ export default class TxManager {
     await this.provider.sendAndConfirm(tx, [], { commitment: "confirmed" });
   }
 
-  private async maybeInitRootCacheIx(rootCachePda: PublicKey, payer: PublicKey) {
+  private async maybeInitRootCacheIx(
+    rootCachePda: PublicKey,
+    payer: PublicKey
+  ) {
     const ai = await this.connection.getAccountInfo(rootCachePda, "confirmed");
     if (ai) return null;
     return await (this.program as any).methods
@@ -123,14 +134,26 @@ export default class TxManager {
     vaultOwnerPda: PublicKey,
     amount: BN,
     rootCachePda: PublicKey
-  ): Promise<{ ixs: TransactionInstruction[]; payerAta: PublicKey; vaultAta: PublicKey }> {
+  ): Promise<{
+    ixs: TransactionInstruction[];
+    payerAta: PublicKey;
+    vaultAta: PublicKey;
+  }> {
     const ixs: TransactionInstruction[] = [];
 
     const payerAta = getAssociatedTokenAddressSync(
-      mint, payer, false, TOKEN_PROGRAM_ID, ASSOCIATED_TOKEN_PROGRAM_ID
+      mint,
+      payer,
+      false,
+      TOKEN_PROGRAM_ID,
+      ASSOCIATED_TOKEN_PROGRAM_ID
     );
     const vaultAta = getAssociatedTokenAddressSync(
-      mint, vaultOwnerPda, true, TOKEN_PROGRAM_ID, ASSOCIATED_TOKEN_PROGRAM_ID
+      mint,
+      vaultOwnerPda,
+      true,
+      TOKEN_PROGRAM_ID,
+      ASSOCIATED_TOKEN_PROGRAM_ID
     );
 
     const initRoot = await this.maybeInitRootCacheIx(rootCachePda, payer);
@@ -139,21 +162,35 @@ export default class TxManager {
     if (!(await this.accountExists(payerAta))) {
       ixs.push(
         createAssociatedTokenAccountIdempotentInstruction(
-          payer, payerAta, payer, mint, TOKEN_PROGRAM_ID, ASSOCIATED_TOKEN_PROGRAM_ID
+          payer,
+          payerAta,
+          payer,
+          mint,
+          TOKEN_PROGRAM_ID,
+          ASSOCIATED_TOKEN_PROGRAM_ID
         )
       );
     }
     if (!(await this.accountExists(vaultAta))) {
       ixs.push(
         createAssociatedTokenAccountIdempotentInstruction(
-          payer, vaultAta, vaultOwnerPda, mint, TOKEN_PROGRAM_ID, ASSOCIATED_TOKEN_PROGRAM_ID
+          payer,
+          vaultAta,
+          vaultOwnerPda,
+          mint,
+          TOKEN_PROGRAM_ID,
+          ASSOCIATED_TOKEN_PROGRAM_ID
         )
       );
     }
 
     if (mint.equals(NATIVE_MINT) && amount.gt(new BN(0))) {
       ixs.push(
-        SystemProgram.transfer({ fromPubkey: payer, toPubkey: payerAta, lamports: Number(amount) }),
+        SystemProgram.transfer({
+          fromPubkey: payer,
+          toPubkey: payerAta,
+          lamports: Number(amount),
+        }),
         createSyncNativeInstruction(payerAta)
       );
     }
@@ -167,14 +204,26 @@ export default class TxManager {
     mint: PublicKey,
     vaultOwnerPda: PublicKey,
     rootCachePda: PublicKey
-  ): Promise<{ ixs: TransactionInstruction[]; recipientAta: PublicKey; vaultAta: PublicKey }> {
+  ): Promise<{
+    ixs: TransactionInstruction[];
+    recipientAta: PublicKey;
+    vaultAta: PublicKey;
+  }> {
     const ixs: TransactionInstruction[] = [];
 
     const recipientAta = getAssociatedTokenAddressSync(
-      mint, payer, false, TOKEN_PROGRAM_ID, ASSOCIATED_TOKEN_PROGRAM_ID
+      mint,
+      payer,
+      false,
+      TOKEN_PROGRAM_ID,
+      ASSOCIATED_TOKEN_PROGRAM_ID
     );
     const vaultAta = getAssociatedTokenAddressSync(
-      mint, vaultOwnerPda, true, TOKEN_PROGRAM_ID, ASSOCIATED_TOKEN_PROGRAM_ID
+      mint,
+      vaultOwnerPda,
+      true,
+      TOKEN_PROGRAM_ID,
+      ASSOCIATED_TOKEN_PROGRAM_ID
     );
 
     const initRoot = await this.maybeInitRootCacheIx(rootCachePda, payer);
@@ -183,14 +232,24 @@ export default class TxManager {
     if (!(await this.accountExists(recipientAta))) {
       ixs.push(
         createAssociatedTokenAccountIdempotentInstruction(
-          payer, recipientAta, payer, mint, TOKEN_PROGRAM_ID, ASSOCIATED_TOKEN_PROGRAM_ID
+          payer,
+          recipientAta,
+          payer,
+          mint,
+          TOKEN_PROGRAM_ID,
+          ASSOCIATED_TOKEN_PROGRAM_ID
         )
       );
     }
     if (!(await this.accountExists(vaultAta))) {
       ixs.push(
         createAssociatedTokenAccountIdempotentInstruction(
-          payer, vaultAta, vaultOwnerPda, mint, TOKEN_PROGRAM_ID, ASSOCIATED_TOKEN_PROGRAM_ID
+          payer,
+          vaultAta,
+          vaultOwnerPda,
+          mint,
+          TOKEN_PROGRAM_ID,
+          ASSOCIATED_TOKEN_PROGRAM_ID
         )
       );
     }
@@ -209,25 +268,32 @@ export default class TxManager {
     amount: bigint | number | BN;
     proofBytes: Buffer;
     publicInputsBytes: Buffer;
-    source?: {                       // optional delegate-mode
+    source?: {
+      // optional delegate-mode
       sourceOwner: PublicKey;
       sourceTokenAccount: PublicKey;
-      useDelegate?: boolean;         // if true => validate delegate + pull from sourceTokenAccount
+      useDelegate?: boolean; // if true => validate delegate + pull from sourceTokenAccount
     };
   }): Promise<string> {
     const payer = this.provider.wallet.publicKey;
 
     if (args.proofBytes.length !== 256) {
-      throw new Error(`proofBytes must be 256 bytes, got ${args.proofBytes.length}`);
+      throw new Error(
+        `proofBytes must be 256 bytes, got ${args.proofBytes.length}`
+      );
     }
     if (args.publicInputsBytes.length !== 7 * 32) {
-      throw new Error(`publicInputsBytes must be 224 bytes, got ${args.publicInputsBytes.length}`);
+      throw new Error(
+        `publicInputsBytes must be 224 bytes, got ${args.publicInputsBytes.length}`
+      );
     }
 
     const depositHashBytes = slice32(args.publicInputsBytes, 5);
     const depositHashHexLE = hexLE32(depositHashBytes);
 
-    const rentAta = await this.connection.getMinimumBalanceForRentExemption(TOKEN_ACCOUNT_SIZE);
+    const rentAta = await this.connection.getMinimumBalanceForRentExemption(
+      TOKEN_ACCOUNT_SIZE
+    );
     const amountBN = bn(args.amount);
     const cushion = 40_000_000;
     const minNeeded = Number(amountBN) + rentAta * 2 + cushion;
@@ -236,13 +302,24 @@ export default class TxManager {
     const treePda = pda([TREE_SEED], this.programId);
     const rootCachePda = pda([ROOT_CACHE_SEED], this.programId);
     const vaultOwnerPda = pda([VAULT_SEED], this.programId);
-    const depositMarkerPda = pda([DEPOSIT_SEED, depositHashBytes], this.programId);
+    const depositMarkerPda = pda(
+      [DEPOSIT_SEED, depositHashBytes],
+      this.programId
+    );
 
     const mintDecimals = await this.getMintDecimals(args.mint);
 
     // Stage A — setup (always ensure vault ATA + root cache)
-    const { ixs: setupIxs, payerAta, vaultAta } = await this.buildSetupIxs(
-      payer, args.mint, vaultOwnerPda, amountBN, rootCachePda
+    const {
+      ixs: setupIxs,
+      payerAta,
+      vaultAta,
+    } = await this.buildSetupIxs(
+      payer,
+      args.mint,
+      vaultOwnerPda,
+      amountBN,
+      rootCachePda
     );
     // In delegate mode we don't need relayer payer ATA existence, but it's already idempotent.
 
@@ -254,7 +331,11 @@ export default class TxManager {
     if (amountBN.gt(new BN(0))) {
       if (args.source?.useDelegate) {
         // Validate client ATA + delegate allowance
-        const srcAcc = await getAccount(this.connection, args.source.sourceTokenAccount, "confirmed");
+        const srcAcc = await getAccount(
+          this.connection,
+          args.source.sourceTokenAccount,
+          "confirmed"
+        );
         if (!srcAcc.owner.equals(args.source.sourceOwner)) {
           throw new Error("sourceTokenAccount.owner mismatch with sourceOwner");
         }
@@ -262,11 +343,15 @@ export default class TxManager {
           throw new Error("sourceTokenAccount.mint mismatch with tokenMint");
         }
         if (!srcAcc.delegate || !srcAcc.delegate.equals(payer)) {
-          throw new Error("sourceTokenAccount.delegate is not the relayer wallet");
+          throw new Error(
+            "sourceTokenAccount.delegate is not the relayer wallet"
+          );
         }
         const delegated = BigInt(srcAcc.delegatedAmount.toString());
         if (delegated < BigInt(amountBN.toString())) {
-          throw new Error(`delegatedAmount ${delegated} < required ${amountBN.toString()}`);
+          throw new Error(
+            `delegatedAmount ${delegated} < required ${amountBN.toString()}`
+          );
         }
 
         // Transfer from client's ATA with relayer signing as delegate
@@ -275,7 +360,7 @@ export default class TxManager {
             args.source.sourceTokenAccount,
             args.mint,
             vaultAta,
-            payer,                              // delegate authority (relayer)
+            payer, // delegate authority (relayer)
             BigInt(amountBN.toString()),
             mintDecimals
           )
@@ -300,7 +385,11 @@ export default class TxManager {
 
     const run = () =>
       (this.program as any).methods
-        .shieldedDepositAtomic(depositHashBytes, args.proofBytes, args.publicInputsBytes)
+        .shieldedDepositAtomic(
+          depositHashBytes,
+          args.proofBytes,
+          args.publicInputsBytes
+        )
         .accountsPartial({
           payer,
           tree: treePda,
@@ -321,7 +410,10 @@ export default class TxManager {
       return await run();
     } catch (e: any) {
       const m = String(e?.message ?? "");
-      if (m.includes("insufficient lamports") || m.includes("custom program error: 0x1")) {
+      if (
+        m.includes("insufficient lamports") ||
+        m.includes("custom program error: 0x1")
+      ) {
         await this.ensurePayerFunds(minNeeded + 80_000_000);
         return await run();
       }
@@ -331,31 +423,40 @@ export default class TxManager {
 
   async submitShieldedTransferAtomicBytes(args: {
     mint: PublicKey;
-    proofBytes: Buffer;             // 256 bytes
-    publicInputsBytes: Buffer;      // 9*32 bytes
+    proofBytes: Buffer; // 256 bytes
+    publicInputsBytes: Buffer; // 9*32 bytes
     computeUnitLimit?: number;
   }): Promise<string> {
     const payer = this.provider.wallet.publicKey;
 
     if (args.proofBytes.length !== 256) {
-      throw new Error(`proofBytes must be 256 bytes, got ${args.proofBytes.length}`);
+      throw new Error(
+        `proofBytes must be 256 bytes, got ${args.proofBytes.length}`
+      );
     }
     if (args.publicInputsBytes.length !== 9 * 32) {
-      throw new Error(`publicInputsBytes must be 288 bytes, got ${args.publicInputsBytes.length}`);
+      throw new Error(
+        `publicInputsBytes must be 288 bytes, got ${args.publicInputsBytes.length}`
+      );
     }
 
     const nullifierBuf = slice32(args.publicInputsBytes, 2);
 
     const treePda = pda([TREE_SEED], this.programId);
     const rootCachePda = pda([ROOT_CACHE_SEED], this.programId);
-    const nullifierRecordPda = pda([NULLIFIER_SEED, nullifierBuf], this.programId);
+    const nullifierRecordPda = pda(
+      [NULLIFIER_SEED, nullifierBuf],
+      this.programId
+    );
 
     const setupIxs: TransactionInstruction[] = [];
     const initRoot = await this.maybeInitRootCacheIx(rootCachePda, payer);
     if (initRoot) setupIxs.push(initRoot);
 
     const cu = Number(process.env.CU_LIMIT ?? 800_000);
-    const cuIx = ComputeBudgetProgram.setComputeUnitLimit({ units: args.computeUnitLimit ?? cu });
+    const cuIx = ComputeBudgetProgram.setComputeUnitLimit({
+      units: args.computeUnitLimit ?? cu,
+    });
 
     const anchorIx = await (this.program as any).methods
       .shieldedTransfer(nullifierBuf, args.proofBytes, args.publicInputsBytes)
@@ -372,7 +473,10 @@ export default class TxManager {
     if (setupIxs.length) tx.add(...setupIxs);
     tx.add(cuIx, anchorIx);
 
-    const sig = await this.provider.sendAndConfirm(tx, [], { skipPreflight: false, commitment: "confirmed" });
+    const sig = await this.provider.sendAndConfirm(tx, [], {
+      skipPreflight: false,
+      commitment: "confirmed",
+    });
     return sig;
   }
 
@@ -381,33 +485,46 @@ export default class TxManager {
    */
   async submitShieldedWithdrawAtomicBytes(args: {
     mint: PublicKey;
-    proofBytes: Buffer;            // 256
-    publicInputsBytes: Buffer;     // 5 * 32
+    proofBytes: Buffer; // 256
+    publicInputsBytes: Buffer; // 7 * 32  (NULLIFIER, ROOT, OWNER_LO, OWNER_HI, RECIPIENT_PK, AMOUNT, TOKEN_ID)
     computeUnitLimit?: number;
   }): Promise<string> {
     const payer = this.provider.wallet.publicKey;
 
     if (args.proofBytes.length !== 256) {
-      throw new Error(`proofBytes must be 256 bytes, got ${args.proofBytes.length}`);
+      throw new Error(
+        `proofBytes must be 256 bytes, got ${args.proofBytes.length}`
+      );
     }
-    if (args.publicInputsBytes.length !== 5 * 32) {
-      throw new Error(`publicInputsBytes must be 160 bytes, got ${args.publicInputsBytes.length}`);
+    if (args.publicInputsBytes.length !== 7 * 32) {
+      throw new Error(
+        `publicInputsBytes must be 224 bytes, got ${args.publicInputsBytes.length}`
+      );
     }
 
-    const nullifierBuf   = slice32(args.publicInputsBytes, 0);
+    const nullifierBuf = slice32(args.publicInputsBytes, 0);
     const nullifierHexLE = hexLE32(nullifierBuf);
 
-    const rootCachePda  = pda([ROOT_CACHE_SEED], this.programId);
+    const rootCachePda = pda([ROOT_CACHE_SEED], this.programId);
     const vaultOwnerPda = pda([VAULT_SEED], this.programId);
-    const nullifierPda  = pda([NULLIFIER_SEED, nullifierBuf], this.programId);
+    const nullifierPda = pda([NULLIFIER_SEED, nullifierBuf], this.programId);
 
-    const { ixs: setupIxs, recipientAta, vaultAta } = await this.buildWithdrawSetupIxs(
-      payer, args.mint, vaultOwnerPda, rootCachePda
+    const {
+      ixs: setupIxs,
+      recipientAta,
+      vaultAta,
+    } = await this.buildWithdrawSetupIxs(
+      payer,
+      args.mint,
+      vaultOwnerPda,
+      rootCachePda
     );
 
     const cuUnits = Number(process.env.CU_LIMIT ?? 800_000);
-    const cuIx    = ComputeBudgetProgram.setComputeUnitLimit({ units: args.computeUnitLimit ?? cuUnits });
-    const memoIx  = this.memoIxUtf8("withdraw:" + nullifierHexLE);
+    const cuIx = ComputeBudgetProgram.setComputeUnitLimit({
+      units: args.computeUnitLimit ?? cuUnits,
+    });
+    const memoIx = this.memoIxUtf8("withdraw:" + nullifierHexLE);
 
     const anchorIx = await (this.program as any).methods
       .shieldedWithdraw(nullifierBuf, args.proofBytes, args.publicInputsBytes)

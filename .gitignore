@@ -37,3 +37,9 @@ tmp/
 temp/
 
 data/
+
+# zk
+src/zk/circuits/
+*.zkey
+*_vkey.json
+*.wasm
