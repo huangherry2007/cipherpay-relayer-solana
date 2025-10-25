@@ -22,9 +22,13 @@ const DEBUG_EVENTS = process.env.RELAYER_EVENT_DEBUG !== "0"; // default ON unle
 
 /* ---------- optional comparisons via env ---------- */
 const PUBLICS_LE_RAW = (process.env.PUBLICS_LE || "")
-  .split(",").map((s) => s.trim()).filter(Boolean);
+  .split(",")
+  .map((s) => s.trim())
+  .filter(Boolean);
 const ROOTS_BE_RAW = (process.env.ROOTS_BE || "")
-  .split(",").map((s) => s.trim()).filter(Boolean);
+  .split(",")
+  .map((s) => s.trim())
+  .filter(Boolean);
 
 /* ----------------------------- provider/program ---------------------------- */
 
@@ -35,8 +39,7 @@ function makeProvider(): AnchorProvider {
     "http://127.0.0.1:8899";
 
   const walletPath =
-    process.env.ANCHOR_WALLET ||
-    `${process.env.HOME}/.config/solana/id.json`;
+    process.env.ANCHOR_WALLET || `${process.env.HOME}/.config/solana/id.json`;
 
   const secret = Buffer.from(JSON.parse(fs.readFileSync(walletPath, "utf8")));
   const kp = web3.Keypair.fromSecretKey(secret);
@@ -58,21 +61,21 @@ function makeProgram(provider: AnchorProvider): Program {
 
 export type DepositBinArgs = {
   amount: bigint;
-  tokenMint: string;         // base58
-  proofBytes: Buffer;        // 256 bytes
+  tokenMint: string; // base58
+  proofBytes: Buffer; // 256 bytes
   publicInputsBytes: Buffer; // 7*32 bytes
 };
 
 export type TransferBinArgs = {
-  tokenMint: string;         // base58
-  proofBytes: Buffer;        // 256 bytes
+  tokenMint: string; // base58
+  proofBytes: Buffer; // 256 bytes
   publicInputsBytes: Buffer; // 9*32 bytes
 };
 
 export type WithdrawBinArgs = {
-  tokenMint: string;         // base58
-  proofBytes: Buffer;        // 256 bytes
-  publicInputsBytes: Buffer; // 5*32 bytes
+  tokenMint: string; // base58
+  proofBytes: Buffer; // 256 bytes
+  publicInputsBytes: Buffer; // 7*32 bytes
 };
 
 type SubmitWithinOpts = {
@@ -84,9 +87,10 @@ type SubmitWithinOpts = {
 /* ------------------------------- helpers ---------------------------------- */
 
 const hex = (u: Uint8Array | Buffer) => Buffer.from(u).toString("hex");
-const viewBE = (u: Uint8Array) => Buffer.from(u);            // BE view == raw bytes
-const viewLE = (u: Uint8Array) => Buffer.from(u).reverse();  // LE view (reversed)
-const pad64 = (s: string) => s.replace(/^0x/i, "").padStart(64, "0").toLowerCase();
+const viewBE = (u: Uint8Array) => Buffer.from(u); // BE view == raw bytes
+const viewLE = (u: Uint8Array) => Buffer.from(u).reverse(); // LE view (reversed)
+const pad64 = (s: string) =>
+  s.replace(/^0x/i, "").padStart(64, "0").toLowerCase();
 
 const le32ToBig = (u: Uint8Array | Buffer): bigint => {
   const b = Buffer.from(u);
@@ -124,7 +128,8 @@ const normalizeMint = (m: any): string => {
 };
 
 // ✅ robust byte converters — never pass PublicKey straight to Buffer.from
-const isBN = (v: any): v is anchor.BN => !!v && typeof v === "object" && typeof v.toArray === "function";
+const isBN = (v: any): v is anchor.BN =>
+  !!v && typeof v === "object" && typeof v.toArray === "function";
 const toBytes = (v: any): Uint8Array => {
   if (!v) return new Uint8Array();
   if (v instanceof Uint8Array) return v;
@@ -135,14 +140,21 @@ const toBytes = (v: any): Uint8Array => {
   if (typeof v === "bigint") {
     const out = Buffer.alloc(32);
     let x = v;
-    for (let i = 0; i < 32; i++) { out[i] = Number(x & 0xffn); x >>= 8n; }
+    for (let i = 0; i < 32; i++) {
+      out[i] = Number(x & 0xffn);
+      x >>= 8n;
+    }
     return out;
   }
   if (typeof v === "string") {
     const s = v.trim();
     // try hex else base58 else utf8
     if (/^[0-9a-f]+$/i.test(s) && s.length % 2 === 0) return Buffer.from(s, "hex");
-    try { return new web3.PublicKey(s).toBytes(); } catch {/* not base58 */}
+    try {
+      return new web3.PublicKey(s).toBytes();
+    } catch {
+      /* not base58 */
+    }
     return Buffer.from(s, "utf8");
   }
   return Uint8Array.from(v as any); // last resort for number[]-like
@@ -153,6 +165,16 @@ const toBuf32 = (v: any): Buffer => {
     throw new Error(`expected 32 bytes, got ${b.length}`);
   }
   return b;
+};
+
+/* ---- tiny runtime guards for proof/publics sizes ---- */
+const expectLen = (label: string, buf: Buffer, len: number) => {
+  if (!Buffer.isBuffer(buf)) {
+    throw new Error(`${label}: expected Buffer, got ${typeof buf}`);
+  }
+  if (buf.length !== len) {
+    throw new Error(`${label}: expected ${len} bytes, got ${buf.length}`);
+  }
 };
 
 /* Accept both snake_case and camelCase for every field */
@@ -173,7 +195,12 @@ const XFER_MAP = {
   out2_commitment: ["out2_commitment", "out2Commitment"],
   enc_note1_hash: ["enc_note1_hash", "encNote1Hash"],
   enc_note2_hash: ["enc_note2_hash", "encNote2Hash"],
-  old_merkle_root: ["merkle_root_before", "merkleRootBefore", "old_merkle_root", "oldMerkleRoot"],
+  old_merkle_root: [
+    "merkle_root_before",
+    "merkleRootBefore",
+    "old_merkle_root",
+    "oldMerkleRoot",
+  ],
   new_merkle_root1: ["new_merkle_root1", "newMerkleRoot1"],
   new_merkle_root2: ["new_merkle_root2", "newMerkleRoot2"],
   next_leaf_index: ["next_leaf_index", "nextLeafIndex"],
@@ -183,8 +210,17 @@ const XFER_MAP = {
 /* Accept both snake_case and camelCase for WithdrawCompleted */
 const WD_MAP = {
   nullifier: ["nullifier", "nf", "nf32"],
-  old_merkle_root: ["merkle_root_used", "merkleRootUsed", "old_merkle_root", "oldMerkleRoot"],
-  recipient_wallet_pubkey: ["recipient", "recipientWalletPubKey", "recipient_wallet_pubkey"],
+  old_merkle_root: [
+    "merkle_root_used",
+    "merkleRootUsed",
+    "old_merkle_root",
+    "oldMerkleRoot",
+  ],
+  recipient_wallet_pubkey: [
+    "recipient",
+    "recipientWalletPubKey",
+    "recipient_wallet_pubkey",
+  ],
   amount: ["amount"],
   mint: ["mint"],
 };
@@ -193,11 +229,19 @@ const WD_MAP = {
 
 const toPayload = (raw: any): DepositCompletedEvent => {
   const deposit_hash = toBuf32(mustPick(raw, MAP.deposit_hash, "deposit_hash"));
-  const owner_cipherpay_pubkey = toBuf32(mustPick(raw, MAP.owner_cipherpay_pubkey, "owner_cipherpay_pubkey"));
+  const owner_cipherpay_pubkey = toBuf32(
+    mustPick(raw, MAP.owner_cipherpay_pubkey, "owner_cipherpay_pubkey"),
+  );
   const commitment = toBuf32(mustPick(raw, MAP.commitment, "commitment"));
-  const old_merkle_root = toBuf32(mustPick(raw, MAP.old_merkle_root, "old_merkle_root"));
-  const new_merkle_root = toBuf32(mustPick(raw, MAP.new_merkle_root, "new_merkle_root"));
-  const next_leaf_index = Number(mustPick(raw, MAP.next_leaf_index, "next_leaf_index"));
+  const old_merkle_root = toBuf32(
+    mustPick(raw, MAP.old_merkle_root, "old_merkle_root"),
+  );
+  const new_merkle_root = toBuf32(
+    mustPick(raw, MAP.new_merkle_root, "new_merkle_root"),
+  );
+  const next_leaf_index = Number(
+    mustPick(raw, MAP.next_leaf_index, "next_leaf_index"),
+  );
   const mintRaw = mustPick(raw, MAP.mint, "mint");
 
   return {
@@ -213,14 +257,30 @@ const toPayload = (raw: any): DepositCompletedEvent => {
 
 const toTransferPayload = (raw: any): TransferCompletedEvent => {
   const nullifier = toBuf32(mustPick(raw, XFER_MAP.nullifier, "nullifier"));
-  const out1_commitment = toBuf32(mustPick(raw, XFER_MAP.out1_commitment, "out1_commitment"));
-  const out2_commitment = toBuf32(mustPick(raw, XFER_MAP.out2_commitment, "out2_commitment"));
-  const enc_note1_hash = toBuf32(mustPick(raw, XFER_MAP.enc_note1_hash, "enc_note1_hash"));
-  const enc_note2_hash = toBuf32(mustPick(raw, XFER_MAP.enc_note2_hash, "enc_note2_hash"));
-  const old_merkle_root = toBuf32(mustPick(raw, XFER_MAP.old_merkle_root, "old_merkle_root"));
-  const new_merkle_root1 = toBuf32(mustPick(raw, XFER_MAP.new_merkle_root1, "new_merkle_root1"));
-  const new_merkle_root2 = toBuf32(mustPick(raw, XFER_MAP.new_merkle_root2, "new_merkle_root2"));
-  const next_leaf_index = Number(mustPick(raw, XFER_MAP.next_leaf_index, "next_leaf_index"));
+  const out1_commitment = toBuf32(
+    mustPick(raw, XFER_MAP.out1_commitment, "out1_commitment"),
+  );
+  const out2_commitment = toBuf32(
+    mustPick(raw, XFER_MAP.out2_commitment, "out2_commitment"),
+  );
+  const enc_note1_hash = toBuf32(
+    mustPick(raw, XFER_MAP.enc_note1_hash, "enc_note1_hash"),
+  );
+  const enc_note2_hash = toBuf32(
+    mustPick(raw, XFER_MAP.enc_note2_hash, "enc_note2_hash"),
+  );
+  const old_merkle_root = toBuf32(
+    mustPick(raw, XFER_MAP.old_merkle_root, "old_merkle_root"),
+  );
+  const new_merkle_root1 = toBuf32(
+    mustPick(raw, XFER_MAP.new_merkle_root1, "new_merkle_root1"),
+  );
+  const new_merkle_root2 = toBuf32(
+    mustPick(raw, XFER_MAP.new_merkle_root2, "new_merkle_root2"),
+  );
+  const next_leaf_index = Number(
+    mustPick(raw, XFER_MAP.next_leaf_index, "next_leaf_index"),
+  );
   const mintRaw = mustPick(raw, XFER_MAP.mint, "mint");
 
   return {
@@ -239,7 +299,9 @@ const toTransferPayload = (raw: any): TransferCompletedEvent => {
 
 const toWithdrawPayload = (raw: any): WithdrawCompletedEvent => {
   const nullifier = toBuf32(mustPick(raw, WD_MAP.nullifier, "nullifier"));
-  const old_merkle_root = toBuf32(mustPick(raw, WD_MAP.old_merkle_root, "old_merkle_root"));
+  const old_merkle_root = toBuf32(
+    mustPick(raw, WD_MAP.old_merkle_root, "old_merkle_root"),
+  );
 
   // optional fields — normalize if present
   const recipRaw = pick(raw, WD_MAP.recipient_wallet_pubkey);
@@ -251,11 +313,11 @@ const toWithdrawPayload = (raw: any): WithdrawCompletedEvent => {
 
   const amount =
     amtRaw != null
-      ? (Buffer.isBuffer(amtRaw) || amtRaw instanceof Uint8Array
-          ? Buffer.from(amtRaw)
-          : isBN(amtRaw)
-            ? Buffer.from((amtRaw as anchor.BN).toArray("le", 32))
-            : toBuf32(amtRaw))
+      ? Buffer.isBuffer(amtRaw) || amtRaw instanceof Uint8Array
+        ? Buffer.from(amtRaw)
+        : isBN(amtRaw)
+          ? Buffer.from((amtRaw as anchor.BN).toArray("le", 32))
+          : toBuf32(amtRaw)
       : undefined;
 
   return {
@@ -271,7 +333,7 @@ const toWithdrawPayload = (raw: any): WithdrawCompletedEvent => {
 async function debugEventBlock(store: MySqlMerkleStore, ev: DepositCompletedEvent) {
   if (!DEBUG_EVENTS) return;
 
-  const c  = Buffer.from(ev.commitment);
+  const c = Buffer.from(ev.commitment);
   const or = Buffer.from(ev.old_merkle_root);
   const nr = Buffer.from(ev.new_merkle_root);
 
@@ -279,7 +341,9 @@ async function debugEventBlock(store: MySqlMerkleStore, ev: DepositCompletedEven
   try {
     const rootBuf = await store.getRoot(TREE_ID);
     dbRootLE = hex(rootBuf);
-  } catch {/* ignore */}
+  } catch {
+    /* ignore */
+  }
 
   const pubsLE = PUBLICS_LE_RAW.map(pad64);
   type SlotInfo = { slot: number; le_hex: string; le_decimal: string };
@@ -290,32 +354,34 @@ async function debugEventBlock(store: MySqlMerkleStore, ev: DepositCompletedEven
 
   const eventCommitLEHex = hex(c);
   const eventCommitLEDec = le32ToBig(c).toString();
-  const matchIdxHex = pubsSlots.findIndex(s => s.le_hex === eventCommitLEHex);
-  const matchIdxDec = pubsSlots.findIndex(s => s.le_decimal === eventCommitLEDec);
+  const matchIdxHex = pubsSlots.findIndex((s) => s.le_hex === eventCommitLEHex);
+  const matchIdxDec = pubsSlots.findIndex(
+    (s) => s.le_decimal === eventCommitLEDec,
+  );
 
   const rootsBE = ROOTS_BE_RAW.map(pad64);
   const rootOldBE = hex(viewBE(or));
   const rootNewBE = hex(viewBE(nr));
-  const cmpOld = rootsBE.length === 2 ? (rootOldBE === rootsBE[0]) : undefined;
-  const cmpNew = rootsBE.length === 2 ? (rootNewBE === rootsBE[1]) : undefined;
+  const cmpOld = rootsBE.length === 2 ? rootOldBE === rootsBE[0] : undefined;
+  const cmpNew = rootsBE.length === 2 ? rootNewBE === rootsBE[1] : undefined;
 
   console.log("\n[events:debug] DepositCompleted (byte views + comparisons)", {
     commitment: {
       raw_as_LE_hex: eventCommitLEHex,
-      as_BE_hex:     hex(viewLE(c)),
-      le_decimal:    eventCommitLEDec,
+      as_BE_hex: hex(viewLE(c)),
+      le_decimal: eventCommitLEDec,
     },
     old_merkle_root: {
       raw_as_BE_hex: hex(viewBE(or)),
-      as_LE_hex:     hex(viewLE(or)),
-      be_decimal:    be32ToBig(or).toString(),
-      le_decimal:    le32ToBig(or).toString(),
+      as_LE_hex: hex(viewLE(or)),
+      be_decimal: be32ToBig(or).toString(),
+      le_decimal: le32ToBig(or).toString(),
     },
     new_merkle_root: {
       raw_as_BE_hex: hex(viewBE(nr)),
-      as_LE_hex:     hex(viewLE(nr)),
-      be_decimal:    be32ToBig(nr).toString(),
-      le_decimal:    le32ToBig(nr).toString(),
+      as_LE_hex: hex(viewLE(nr)),
+      be_decimal: be32ToBig(nr).toString(),
+      le_decimal: le32ToBig(nr).toString(),
     },
     db: { treeId: TREE_ID, current_root_LE_hex: dbRootLE },
     compare: {
@@ -324,14 +390,17 @@ async function debugEventBlock(store: MySqlMerkleStore, ev: DepositCompletedEven
       PUBLICS_LE_match_slotIndex_by_hex: matchIdxHex,
       PUBLICS_LE_match_slotIndex_by_decimal: matchIdxDec,
       ROOTS_BE_present: rootsBE.length === 2,
-      ROOTS_BE_match: rootsBE.length === 2 ? {
-        provided_old_be: rootsBE[0],
-        provided_new_be: rootsBE[1],
-        event_old_be: rootOldBE,
-        event_new_be: rootNewBE,
-        old_equal: cmpOld,
-        new_equal: cmpNew,
-      } : undefined,
+      ROOTS_BE_match:
+        rootsBE.length === 2
+          ? {
+              provided_old_be: rootsBE[0],
+              provided_new_be: rootsBE[1],
+              event_old_be: rootOldBE,
+              event_new_be: rootNewBE,
+              old_equal: cmpOld,
+              new_equal: cmpNew,
+            }
+          : undefined,
     },
   });
 }
@@ -359,6 +428,8 @@ class SolanaRelayer {
   }
 
   async submitDepositWithBin(args: DepositBinArgs) {
+    expectLen("deposit.proofBytes", args.proofBytes, 256);
+    expectLen("deposit.publicInputsBytes", args.publicInputsBytes, 7 * 32);
     const mint = new web3.PublicKey(args.tokenMint);
     const sig = await this.txm.submitShieldedDepositAtomicBytes({
       mint,
@@ -371,7 +442,7 @@ class SolanaRelayer {
 
   async submitDepositWithin(
     args: DepositBinArgs,
-    opts: SubmitWithinOpts = {}
+    opts: SubmitWithinOpts = {},
   ): Promise<{ signature: string }> {
     const timeoutMs = opts.timeoutMs ?? 25_000;
     const retries = Math.max(0, opts.retries ?? 1);
@@ -381,21 +452,33 @@ class SolanaRelayer {
       const to = new Promise<never>((_, rej) => {
         const t = setTimeout(() => {
           clearTimeout(t);
-          rej(new Error(`submitDepositWithin: attempt ${attempt} timed out after ${timeoutMs} ms`));
+          rej(
+            new Error(
+              `submitDepositWithin: attempt ${attempt} timed out after ${timeoutMs} ms`,
+            ),
+          );
         }, timeoutMs);
       });
-      return Promise.race([this.submitDepositWithBin(args), to]) as Promise<{ signature: string }>;
+      return Promise.race([this.submitDepositWithBin(args), to]) as Promise<{
+        signature: string;
+      }>;
     };
 
     let lastErr: unknown = null;
     for (let i = 1; i <= 1 + retries; i++) {
-      try { return await attemptOnce(i); }
-      catch (e) { lastErr = e; if (i <= retries) await new Promise(r => setTimeout(r, 500 * i)); }
+      try {
+        return await attemptOnce(i);
+      } catch (e) {
+        lastErr = e;
+        if (i <= retries) await new Promise((r) => setTimeout(r, 500 * i));
+      }
     }
     throw lastErr instanceof Error ? lastErr : new Error(String(lastErr));
   }
 
   async submitTransferWithBin(args: TransferBinArgs) {
+    expectLen("transfer.proofBytes", args.proofBytes, 256);
+    expectLen("transfer.publicInputsBytes", args.publicInputsBytes, 9 * 32);
     const mint = new web3.PublicKey(args.tokenMint);
     const sig = await this.txm.submitShieldedTransferAtomicBytes({
       mint,
@@ -407,7 +490,7 @@ class SolanaRelayer {
 
   async submitTransferWithin(
     args: TransferBinArgs,
-    opts: SubmitWithinOpts = {}
+    opts: SubmitWithinOpts = {},
   ): Promise<{ signature: string }> {
     const timeoutMs = opts.timeoutMs ?? 25_000;
     const retries = Math.max(0, opts.retries ?? 1);
@@ -417,21 +500,33 @@ class SolanaRelayer {
       const to = new Promise<never>((_, rej) => {
         const t = setTimeout(() => {
           clearTimeout(t);
-          rej(new Error(`submitTransferWithin: attempt ${attempt} timed out after ${timeoutMs} ms`));
+          rej(
+            new Error(
+              `submitTransferWithin: attempt ${attempt} timed out after ${timeoutMs} ms`,
+            ),
+          );
         }, timeoutMs);
       });
-      return Promise.race([this.submitTransferWithBin(args), to]) as Promise<{ signature: string }>;
+      return Promise.race([this.submitTransferWithBin(args), to]) as Promise<{
+        signature: string;
+      }>;
     };
 
     let lastErr: unknown = null;
     for (let i = 1; i <= 1 + retries; i++) {
-      try { return await attemptOnce(i); }
-      catch (e) { lastErr = e; if (i <= retries) await new Promise(r => setTimeout(r, 500 * i)); }
+      try {
+        return await attemptOnce(i);
+      } catch (e) {
+        lastErr = e;
+        if (i <= retries) await new Promise((r) => setTimeout(r, 500 * i));
+      }
     }
     throw lastErr instanceof Error ? lastErr : new Error(String(lastErr));
   }
 
   async submitWithdrawWithBin(args: WithdrawBinArgs) {
+    expectLen("withdraw.proofBytes", args.proofBytes, 256);
+    expectLen("withdraw.publicInputsBytes", args.publicInputsBytes, 7 * 32);
     const mint = new web3.PublicKey(args.tokenMint);
     const sig = await this.txm.submitShieldedWithdrawAtomicBytes({
       mint,
@@ -443,7 +538,7 @@ class SolanaRelayer {
 
   async submitWithdrawWithin(
     args: WithdrawBinArgs,
-    opts: SubmitWithinOpts = {}
+    opts: SubmitWithinOpts = {},
   ): Promise<{ signature: string }> {
     const timeoutMs = opts.timeoutMs ?? 25_000;
     const retries = Math.max(0, opts.retries ?? 1);
@@ -453,16 +548,26 @@ class SolanaRelayer {
       const to = new Promise<never>((_, rej) => {
         const t = setTimeout(() => {
           clearTimeout(t);
-          rej(new Error(`submitWithdrawWithin: attempt ${attempt} timed out after ${timeoutMs} ms`));
+          rej(
+            new Error(
+              `submitWithdrawWithin: attempt ${attempt} timed out after ${timeoutMs} ms`,
+            ),
+          );
         }, timeoutMs);
       });
-      return Promise.race([this.submitWithdrawWithBin(args), to]) as Promise<{ signature: string }>;
+      return Promise.race([this.submitWithdrawWithBin(args), to]) as Promise<{
+        signature: string;
+      }>;
     };
 
     let lastErr: unknown = null;
     for (let i = 1; i <= 1 + retries; i++) {
-      try { return await attemptOnce(i); }
-      catch (e) { lastErr = e; if (i <= retries) await new Promise(r => setTimeout(r, 500 * i)); }
+      try {
+        return await attemptOnce(i);
+      } catch (e) {
+        lastErr = e;
+        if (i <= retries) await new Promise((r) => setTimeout(r, 500 * i));
+      }
     }
     throw lastErr instanceof Error ? lastErr : new Error(String(lastErr));
   }
@@ -484,7 +589,12 @@ class SolanaRelayer {
         this.program.programId,
         async (l) => {
           try {
-            console.log("[onLogs] signature:", (l as any).signature, "slot:", (l as any).slot);
+            console.log(
+              "[onLogs] signature:",
+              (l as any).signature,
+              "slot:",
+              (l as any).slot,
+            );
             for (const m of l.logs) console.log("   ", m);
 
             for (const ev of parser.parseLogs(l.logs) ?? []) {
@@ -521,7 +631,7 @@ class SolanaRelayer {
             console.error("[onLogs] parse/persist error:", e?.message || e);
           }
         },
-        "processed"
+        "processed",
       );
       console.log("[events] onLogs parser attached:", this.onLogsSubId);
     }
@@ -535,12 +645,18 @@ class SolanaRelayer {
             const payload = toPayload(ev);
             await debugEventBlock(this.store!, payload);
             await this.store!.recordDepositCompleted(TREE_ID, payload);
-            console.info("[events] DepositCompleted persisted (anchor listener)", { slot, sig });
+            console.info("[events] DepositCompleted persisted (anchor listener)", {
+              slot,
+              sig,
+            });
           } catch (e: any) {
-            console.error("[events] DepositCompleted handler error:", e?.message || e);
+            console.error(
+              "[events] DepositCompleted handler error:",
+              e?.message || e,
+            );
           }
         },
-        "processed"
+        "processed",
       );
       console.log("[events] DepositCompleted listener started:", this.depositListenerId);
     }
@@ -553,12 +669,18 @@ class SolanaRelayer {
           try {
             const payload = toTransferPayload(ev);
             await this.store!.recordTransferCompleted!(TREE_ID, payload);
-            console.info("[events] TransferCompleted persisted (anchor listener)", { slot, sig });
+            console.info("[events] TransferCompleted persisted (anchor listener)", {
+              slot,
+              sig,
+            });
           } catch (e: any) {
-            console.error("[events] TransferCompleted handler error:", e?.message || e);
+            console.error(
+              "[events] TransferCompleted handler error:",
+              e?.message || e,
+            );
           }
         },
-        "processed"
+        "processed",
       );
       console.log("[events] TransferCompleted listener started:", this.transferListenerId);
     }

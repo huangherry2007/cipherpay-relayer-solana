@@ -35,19 +35,37 @@ dotenv.config();
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
+/* Path to share the freshly-created mint with other tests */
+const SHARED_MINT_PATH = path.resolve(__dirname, "..", ".shared-mint.json");
+function writeSharedMint(mint: PublicKey, decimals: number) {
+  const payload = {
+    mint: mint.toBase58(),
+    decimals,
+    savedAt: new Date().toISOString(),
+  };
+  fs.writeFileSync(SHARED_MINT_PATH, JSON.stringify(payload, null, 2));
+  console.log(
+    `[shared-mint] wrote ${payload.mint} (decimals=${decimals}) to ${SHARED_MINT_PATH}`
+  );
+}
+
 /* API + Auth */
-const BASE_URL   = process.env.E2E_BASE_URL || "http://localhost:3000";
-const AUTH_TOKEN = process.env.DASHBOARD_TOKEN || process.env.API_TOKEN || "supersecret";
+const BASE_URL = process.env.E2E_BASE_URL || "http://localhost:3000";
+const AUTH_TOKEN =
+  process.env.DASHBOARD_TOKEN || process.env.API_TOKEN || "supersecret";
 const HMAC_KEY_ID = process.env.API_KEY_ID || "";
 const HMAC_SECRET = process.env.API_KEY_SECRET || "";
 
 /* Local proving artifacts (optional) */
-const PROOFS_DIR = process.env.DEPOSIT_PROOFS_DIR || path.resolve(__dirname, "./proof");
+const PROOFS_DIR =
+  process.env.DEPOSIT_PROOFS_DIR || path.resolve(__dirname, "./proof");
 const EXAMPLE_INPUT = fs.existsSync(path.join(PROOFS_DIR, "example_input.json"))
   ? path.join(PROOFS_DIR, "example_input.json")
   : path.join(PROOFS_DIR, "example_deposit_input_template.json");
-const WASM_PATH = process.env.DEPOSIT_WASM || path.join(PROOFS_DIR, "deposit.wasm");
-const ZKEY_PATH = process.env.DEPOSIT_ZKEY || path.join(PROOFS_DIR, "deposit_final.zkey");
+const WASM_PATH =
+  process.env.DEPOSIT_WASM || path.join(PROOFS_DIR, "deposit.wasm");
+const ZKEY_PATH =
+  process.env.DEPOSIT_ZKEY || path.join(PROOFS_DIR, "deposit_final.zkey");
 
 /* Chain connection & wallet */
 const RPC_URL =
@@ -55,8 +73,7 @@ const RPC_URL =
   process.env.ANCHOR_PROVIDER_URL ||
   "http://127.0.0.1:8899";
 const KEYPAIR_PATH =
-  process.env.ANCHOR_WALLET ||
-  `${process.env.HOME}/.config/solana/id.json`;
+  process.env.ANCHOR_WALLET || `${process.env.HOME}/.config/solana/id.json`;
 
 /* Field modulus for BN254 */
 const FQ =
@@ -83,14 +100,21 @@ function bearer() {
 }
 function hmacHeaders(raw: Buffer) {
   if (!HMAC_SECRET || !HMAC_KEY_ID) return {};
-  const sig = crypto.createHmac("sha256", HMAC_SECRET).update(raw).digest("hex");
+  const sig = crypto
+    .createHmac("sha256", HMAC_SECRET)
+    .update(raw)
+    .digest("hex");
   return { "X-Api-Key": HMAC_KEY_ID, "X-Api-Signature": sig };
 }
 async function httpJson<T>(url: string, body: any): Promise<T> {
   const raw = Buffer.from(JSON.stringify(body));
   const res = await fetch(url, {
     method: "POST",
-    headers: { "content-type": "application/json", ...bearer(), ...hmacHeaders(raw) },
+    headers: {
+      "content-type": "application/json",
+      ...bearer(),
+      ...hmacHeaders(raw),
+    },
     body: raw,
   });
   if (!res.ok) {
@@ -122,7 +146,7 @@ function fromHexToBigBE(s: string): bigint {
   const t = s.startsWith("0x") ? s.slice(2) : s;
   return BigInt("0x" + t) % FQ;
 }
-function beToLeHex(beHex: string): string {
+function beToLeHex(beHex: string) {
   return Buffer.from(normalizeHex(beHex), "hex").reverse().toString("hex");
 }
 function feFromIndex(idx: number): bigint {
@@ -130,13 +154,19 @@ function feFromIndex(idx: number): bigint {
 }
 
 /** Poseidon arity-2 via H (your export is variadic) */
-async function H2(a: bigint, b: bigint): Promise<bigint> { return await H(a, b); }
+async function H2(a: bigint, b: bigint): Promise<bigint> {
+  return await H(a, b);
+}
 
 /** Compute root from ZERO leaf using BE siblings and indices (bit=0 -> H(cur,sib), bit=1 -> H(sib,cur)) */
 async function computeRootFromZeroPathBE(
-  pathHex: string[], bits: number[]
+  pathHex: string[],
+  bits: number[]
 ): Promise<bigint> {
-  if (pathHex.length !== bits.length) throw new Error(`path length ${pathHex.length} != indices length ${bits.length}`);
+  if (pathHex.length !== bits.length)
+    throw new Error(
+      `path length ${pathHex.length} != indices length ${bits.length}`
+    );
   let cur = 0n;
   for (let i = 0; i < bits.length; i++) {
     const bit = bits[i] | 0;
@@ -173,15 +203,32 @@ async function generateGroth16Proof(
     }
     return x;
   })(inputSignals);
-  const { proof, publicSignals } = await groth16.fullProve(normalized, WASM_PATH, ZKEY_PATH);
+  const { proof, publicSignals } = await groth16.fullProve(
+    normalized,
+    WASM_PATH,
+    ZKEY_PATH
+  );
   return { proof, publicSignals: (publicSignals as any[]).map(String) };
 }
 
 /* ------------------------ DB helpers (for SHOW_DB) ------------------------ */
 let dbConn: mysql.Connection | null = null;
-async function dbConnectIfNeeded() { if (SHOW_DB && !dbConn) dbConn = await mysql.createConnection(DB_CONFIG); }
-async function dbCloseIfNeeded() { if (dbConn) { try { await dbConn.end(); } catch {} dbConn = null; } }
-async function dbGetNodeBeHex(treeId: number, layer: number, index: number): Promise<string | null> {
+async function dbConnectIfNeeded() {
+  if (SHOW_DB && !dbConn) dbConn = await mysql.createConnection(DB_CONFIG);
+}
+async function dbCloseIfNeeded() {
+  if (dbConn) {
+    try {
+      await dbConn.end();
+    } catch {}
+    dbConn = null;
+  }
+}
+async function dbGetNodeBeHex(
+  treeId: number,
+  layer: number,
+  index: number
+): Promise<string | null> {
   if (!dbConn) return null;
   const [rows] = await dbConn.query(
     `SELECT LOWER(HEX(fe)) AS be_hex FROM nodes_all
@@ -192,7 +239,9 @@ async function dbGetNodeBeHex(treeId: number, layer: number, index: number): Pro
   return r?.be_hex || null;
 }
 function logRow(row: Record<string, any>) {
-  console.log(util.inspect(row, { colors: true, depth: null, maxArrayLength: null }));
+  console.log(
+    util.inspect(row, { colors: true, depth: null, maxArrayLength: null })
+  );
 }
 
 /* ------------------------------------------------------------------ */
@@ -221,7 +270,10 @@ describe("E2E: deposit via client ATA with SPL delegate", () => {
     // 1) Airdrop payer if needed
     const bal = await connection.getBalance(payer.publicKey);
     if (bal < 2 * LAMPORTS_PER_SOL) {
-      const sig = await connection.requestAirdrop(payer.publicKey, 3 * LAMPORTS_PER_SOL);
+      const sig = await connection.requestAirdrop(
+        payer.publicKey,
+        3 * LAMPORTS_PER_SOL
+      );
       await connection.confirmTransaction(sig, "confirmed");
     }
 
@@ -232,200 +284,275 @@ describe("E2E: deposit via client ATA with SPL delegate", () => {
     // 3) Fetch relayer pubkey from your info route
     type InfoResp = { relayerPubkey: string };
     const info = await httpGet<InfoResp>(`${BASE_URL}/api/v1/relayer/info`);
-    if (!info?.relayerPubkey) throw new Error("relayer/info missing relayerPubkey");
+    if (!info?.relayerPubkey)
+      throw new Error("relayer/info missing relayerPubkey");
     relayerPk = new PublicKey(info.relayerPubkey);
     console.log("[relayer] pubkey:", relayerPk.toBase58());
 
     // 4) Create a fresh test mint (0 decimals) and user's ATA
     tokenMint = await createMint(connection, payer, payer.publicKey, null, 0);
-    const ata = await getOrCreateAssociatedTokenAccount(connection, payer, tokenMint, payer.publicKey);
+    const ata = await getOrCreateAssociatedTokenAccount(
+      connection,
+      payer,
+      tokenMint,
+      payer.publicKey
+    );
     userAta = ata.address;
-    console.log("[mint/ata] mint:", tokenMint.toBase58(), "userAta:", userAta.toBase58());
+    console.log(
+      "[mint/ata] mint:",
+      tokenMint.toBase58(),
+      "userAta:",
+      userAta.toBase58()
+    );
+
+    // Persist the mint so withdraw test can reuse the exact same one
+    const mi = await getMint(connection, tokenMint);
+    writeSharedMint(tokenMint, mi.decimals);
 
     // 5) Mint enough tokens to user's ATA (amount from example or 100)
     const amount = BigInt(example.amount ?? 100);
     if (amount > 0n) {
-      const sig = await mintTo(connection, payer, tokenMint, userAta, payer.publicKey, Number(amount));
+      const sig = await mintTo(
+        connection,
+        payer,
+        tokenMint,
+        userAta,
+        payer.publicKey,
+        Number(amount)
+      );
       console.log("[mintTo] sig:", sig, "amount:", Number(amount));
     }
 
     // 6) Approve the relayer as SPL delegate for user's ATA
-    const mi = await getMint(connection, tokenMint);
     const allowance = BigInt(example.amount ?? 100);
     const sig2 = await approveChecked(
       connection,
-      payer,              // fee payer
+      payer, // fee payer
       tokenMint,
       userAta,
-      relayerPk,          // delegate = relayer’s wallet
-      payer,              // owner signs
+      relayerPk, // delegate = relayer’s wallet
+      payer, // owner signs
       allowance,
       mi.decimals
     );
-    console.log("[delegate] approveChecked sig:", sig2, "allowance:", Number(allowance));
+    console.log(
+      "[delegate] approveChecked sig:",
+      sig2,
+      "allowance:",
+      Number(allowance)
+    );
   });
 
-  afterAll(async () => { await dbCloseIfNeeded(); });
+  afterAll(async () => {
+    await dbCloseIfNeeded();
+  });
 
-  it(
-    "prepares, (optionally) proves, and submits a delegated deposit",
-    async () => {
-      const ownerWalletPubKey  = BigInt(example.ownerWalletPubKey ?? 0);
-      const ownerWalletPrivKey = BigInt(example.ownerWalletPrivKey ?? 0);
-      const tokenId            = BigInt(example.tokenId ?? 0);
-      const memo               = BigInt(example.memo ?? 0);
-      const amount             = BigInt(example.amount ?? 100);
+  it("prepares, (optionally) proves, and submits a delegated deposit", async () => {
+    const ownerWalletPubKey = BigInt(example.ownerWalletPubKey ?? 0);
+    const ownerWalletPrivKey = BigInt(example.ownerWalletPrivKey ?? 0);
+    const tokenId = BigInt(example.tokenId ?? 0);
+    const memo = BigInt(example.memo ?? 0);
+    const amount = BigInt(example.amount ?? 100);
 
-      // Test simplification (same as your other test)
-      const idx = Number(process.env.DEPOSIT_INDEX ?? "0");
-      const randomness = feFromIndex(idx);
-      const nonce      = feFromIndex(idx);
+    // Test simplification (same as your other test)
+    const idx = Number(process.env.INDEX ?? "0");
+    const randomness = feFromIndex(idx);
+    const nonce = feFromIndex(idx);
 
-      const ownerCipherPayPubKey = await H(ownerWalletPubKey, ownerWalletPrivKey);
-      const commitmentBig = await H(amount, ownerCipherPayPubKey, randomness, tokenId, memo);
+    const ownerCipherPayPubKey = await H(ownerWalletPubKey, ownerWalletPrivKey);
+    const commitmentBig = await H(
+      amount,
+      ownerCipherPayPubKey,
+      randomness,
+      tokenId,
+      memo
+    );
 
-      // Ask server for merkle path using BE-only API
-      type PrepareResp = {
-        merkleRoot: string;          // BE hex(32)
-        nextLeafIndex: number;
-        inPathElements: string[];    // BE hex bottom→top
-        inPathIndices: number[];     // 0/1 bits
-      };
-      const prep = await httpJson<PrepareResp>(`${BASE_URL}/api/v1/prepare/deposit`, {
+    // Ask server for merkle path using BE-only API
+    type PrepareResp = {
+      merkleRoot: string; // BE hex(32)
+      nextLeafIndex: number;
+      inPathElements: string[]; // BE hex bottom→top
+      inPathIndices: number[]; // 0/1 bits
+    };
+    const prep = await httpJson<PrepareResp>(
+      `${BASE_URL}/api/v1/prepare/deposit`,
+      {
         commitment: commitmentBig.toString(),
-      });
+      }
+    );
 
-      // Basic sanity
-      expect(prep).toBeTruthy();
-      expect(Array.isArray(prep.inPathElements)).toBe(true);
-      expect(Array.isArray(prep.inPathIndices)).toBe(true);
+    // Basic sanity
+    expect(prep).toBeTruthy();
+    expect(Array.isArray(prep.inPathElements)).toBe(true);
+    expect(Array.isArray(prep.inPathIndices)).toBe(true);
 
-      // Recompute old root locally in BE and compare to server’s BE
-      const localOldRoot = await computeRootFromZeroPathBE(prep.inPathElements, prep.inPathIndices);
-      const localBE = hex64(localOldRoot);
-      const prepareBE = normalizeHex(prep.merkleRoot);
-      console.log("\n[oldRoot] BE-check (delegated deposit)", { local_be: localBE, prepare_root_be: prepareBE, leafIndex: prep.nextLeafIndex });
-      if (localBE !== prepareBE) {
-        throw new Error(
-          `oldMerkleRoot mismatch (BE): local=${localBE} prepare=${prepareBE}.\n` +
+    // Recompute old root locally in BE and compare to server’s BE
+    const localOldRoot = await computeRootFromZeroPathBE(
+      prep.inPathElements,
+      prep.inPathIndices
+    );
+    const localBE = hex64(localOldRoot);
+    const prepareBE = normalizeHex(prep.merkleRoot);
+    console.log("\n[oldRoot] BE-check (delegated deposit)", {
+      local_be: localBE,
+      prepare_root_be: prepareBE,
+      leafIndex: prep.nextLeafIndex,
+    });
+    if (localBE !== prepareBE) {
+      throw new Error(
+        `oldMerkleRoot mismatch (BE): local=${localBE} prepare=${prepareBE}.\n` +
           `Check: (1) path/indices order, (2) BE parsing, (3) zero tree init.`
+      );
+    }
+
+    // Optional DB eyeballing
+    if (SHOW_DB && dbConn) {
+      let idxCur = prep.nextLeafIndex;
+      console.log("\n[db-compare] sibling path bottom→top (one row per layer)");
+      for (let layer = 0; layer < prep.inPathIndices.length; layer++) {
+        const bit = prep.inPathIndices[layer] | 0;
+        const isLeft = bit === 0;
+        const sibIndex = isLeft ? idxCur + 1 : idxCur - 1;
+
+        const fromPrepareBE = normalizeHex(prep.inPathElements[layer] || "");
+        const fromDbBE =
+          sibIndex >= 0 ? await dbGetNodeBeHex(TREE_ID, layer, sibIndex) : null;
+
+        const prepDec = BigInt("0x" + fromPrepareBE).toString();
+        const dbDec = fromDbBE ? BigInt("0x" + fromDbBE).toString() : null;
+
+        logRow({
+          layer,
+          idxCur,
+          bit,
+          isLeft,
+          sibIndex,
+          prep_be: "0x" + fromPrepareBE,
+          prep_le: "0x" + beToLeHex(fromPrepareBE),
+          prep_dec: prepDec,
+          db_be: fromDbBE ? "0x" + fromDbBE : null,
+          db_dec: dbDec,
+          equal_hex: !!fromDbBE && fromPrepareBE === fromDbBE,
+          equal_dec: !!fromDbBE && prepDec === dbDec,
+        });
+
+        idxCur >>= 1;
+      }
+      console.log();
+    }
+
+    // Circuit inputs
+    const depositHashBig = await H(ownerCipherPayPubKey, amount, nonce);
+    const inputSignals: Record<string, any> = {
+      ownerWalletPubKey: ownerWalletPubKey.toString(),
+      ownerWalletPrivKey: ownerWalletPrivKey.toString(),
+      randomness: randomness.toString(),
+      tokenId: tokenId.toString(),
+      memo: memo.toString(),
+      amount: amount.toString(),
+      nonce: nonce.toString(),
+
+      inPathElements: prep.inPathElements.map((h) =>
+        fromHexToBigBE(h).toString()
+      ),
+      inPathIndices: prep.inPathIndices,
+      nextLeafIndex: prep.nextLeafIndex.toString(),
+
+      oldMerkleRoot: beHexToBig(prep.merkleRoot).toString(),
+      depositHash: depositHashBig.toString(),
+    };
+
+    // Prove if artifacts present
+    let proof: any = null;
+    let publicSignals: string[] = [];
+    if (hasArtifacts()) {
+      try {
+        const out = await generateGroth16Proof(inputSignals);
+        if (!out) throw new Error("Artifacts missing");
+        proof = out.proof;
+        publicSignals = out.publicSignals;
+      } catch (err) {
+        console.error("❌ fullProve failed. Inputs were:");
+        console.error(
+          util.inspect(inputSignals, {
+            depth: null,
+            colors: true,
+            maxArrayLength: null,
+          })
         );
+        throw err;
       }
+    } else {
+      console.warn(
+        `[deposit-ATA e2e] Missing ${WASM_PATH} / ${ZKEY_PATH}; skipping local proof.`
+      );
+    }
 
-      // Optional DB eyeballing (same style as deposit.test.ts)
-      if (SHOW_DB && dbConn) {
-        let idxCur = prep.nextLeafIndex;
-        console.log("\n[db-compare] sibling path bottom→top (one row per layer)");
-        for (let layer = 0; layer < prep.inPathIndices.length; layer++) {
-          const bit = prep.inPathIndices[layer] | 0;
-          const isLeft = bit === 0;
-          const sibIndex = isLeft ? idxCur + 1 : idxCur - 1;
+    // Hexs for logging (if proof present, prefer its normalized outputs)
+    let commitmentHex = hex64(commitmentBig);
+    let depHashHex = hex64(depositHashBig);
+    if (publicSignals.length >= 7) {
+      commitmentHex = BigInt(publicSignals[0]).toString(16).padStart(64, "0");
+      depHashHex = BigInt(publicSignals[5]).toString(16).padStart(64, "0");
+    }
 
-          const fromPrepareBE = normalizeHex(prep.inPathElements[layer] || "");
-          const fromDbBE = (sibIndex >= 0) ? await dbGetNodeBeHex(TREE_ID, layer, sibIndex) : null;
+    // Body with delegate-source fields
+    const submitBody: any = {
+      operation: "deposit",
+      amount: Number(amount),
+      tokenMint: tokenMint.toBase58(),
+      proof,
+      publicSignals,
+      depositHash: depHashHex,
+      commitment: commitmentHex,
+      memo: Number(memo),
 
-          const prepDec = BigInt("0x" + fromPrepareBE).toString();
-          const dbDec = fromDbBE ? BigInt("0x" + fromDbBE).toString() : null;
+      // 👇 tell relayer to pull from client's ATA via delegate
+      sourceOwner: payer.publicKey.toBase58(),
+      sourceTokenAccount: userAta.toBase58(),
+      useDelegate: true,
+    };
 
-          logRow({
-            layer,
-            idxCur,
-            bit,
-            isLeft,
-            sibIndex,
-            prep_be: "0x" + fromPrepareBE,
-            prep_le: "0x" + beToLeHex(fromPrepareBE),
-            prep_dec: prepDec,
-            db_be: fromDbBE ? "0x" + fromDbBE : null,
-            db_dec: dbDec,
-            equal_hex: !!fromDbBE && (fromPrepareBE === fromDbBE),
-            equal_dec: !!fromDbBE && (prepDec === dbDec),
-          });
+    console.log("\n[submit:delegated deposit] body (truncated proof):");
+    const bodyForLog = {
+      ...submitBody,
+      proof: proof
+        ? { ...proof, pi_a: "[...]", pi_b: "[...]", pi_c: "[...]" }
+        : null,
+    };
+    console.log(
+      util.inspect(bodyForLog, {
+        depth: null,
+        maxArrayLength: null,
+        colors: true,
+      })
+    );
 
-          idxCur >>= 1;
-        }
-        console.log();
-      }
+    if (!proof) {
+      console.warn("[deposit-ATA e2e] No proof generated. Skipping /submit.");
+      return;
+    }
 
-      // Circuit inputs
-      const depositHashBig = await H(ownerCipherPayPubKey, amount, nonce);
-      const inputSignals: Record<string, any> = {
-        ownerWalletPubKey:  ownerWalletPubKey.toString(),
-        ownerWalletPrivKey: ownerWalletPrivKey.toString(),
-        randomness:         randomness.toString(),
-        tokenId:            tokenId.toString(),
-        memo:               memo.toString(),
-        amount:             amount.toString(),
-        nonce:              nonce.toString(),
+    type SubmitResp = {
+      signature?: string;
+      txid?: string;
+      txSig?: string;
+      ok?: boolean;
+    };
+    const result = await httpJson<SubmitResp>(
+      `${BASE_URL}/api/v1/submit/deposit`,
+      submitBody
+    );
 
-        inPathElements:     prep.inPathElements.map(h => fromHexToBigBE(h).toString()),
-        inPathIndices:      prep.inPathIndices,
-        nextLeafIndex:      prep.nextLeafIndex.toString(),
-
-        oldMerkleRoot:      beHexToBig(prep.merkleRoot).toString(),
-        depositHash:        depositHashBig.toString(),
-      };
-
-      // Prove if artifacts present
-      let proof: any = null;
-      let publicSignals: string[] = [];
-      if (hasArtifacts()) {
-        try {
-          const out = await generateGroth16Proof(inputSignals);
-          if (!out) throw new Error("Artifacts missing");
-          proof = out.proof;
-          publicSignals = out.publicSignals;
-        } catch (err) {
-          console.error("❌ fullProve failed. Inputs were:");
-          console.error(util.inspect(inputSignals, { depth: null, colors: true, maxArrayLength: null }));
-          throw err;
-        }
-      } else {
-        console.warn(`[deposit-ATA e2e] Missing ${WASM_PATH} / ${ZKEY_PATH}; skipping local proof.`);
-      }
-
-      // Hexs for logging (if proof present, prefer its normalized outputs)
-      let commitmentHex = hex64(commitmentBig);
-      let depHashHex    = hex64(depositHashBig);
-      if (publicSignals.length >= 7) {
-        commitmentHex = BigInt(publicSignals[0]).toString(16).padStart(64, "0");
-        depHashHex    = BigInt(publicSignals[5]).toString(16).padStart(64, "0");
-      }
-
-      // Body with delegate-source fields
-      const submitBody: any = {
-        operation: "deposit",
-        amount: Number(amount),
-        tokenMint: tokenMint.toBase58(),
-        proof,
-        publicSignals,
-        depositHash: depHashHex,
-        commitment: commitmentHex,
-        memo: Number(memo),
-
-        // 👇 tell relayer to pull from client's ATA via delegate
-        sourceOwner: (payer.publicKey).toBase58(),
-        sourceTokenAccount: userAta.toBase58(),
-        useDelegate: true,
-      };
-
-      console.log("\n[submit:delegated deposit] body (truncated proof):");
-      const bodyForLog = { ...submitBody, proof: proof ? { ...proof, pi_a: "[...]", pi_b: "[...]", pi_c: "[...]" } : null };
-      console.log(util.inspect(bodyForLog, { depth: null, maxArrayLength: null, colors: true }));
-
-      if (!proof) {
-        console.warn("[deposit-ATA e2e] No proof generated. Skipping /submit.");
-        return;
-      }
-
-      type SubmitResp = { signature?: string; txid?: string; txSig?: string; ok?: boolean };
-      const result = await httpJson<SubmitResp>(`${BASE_URL}/api/v1/submit/deposit`, submitBody);
-
-      expect(result).toBeTruthy();
-      const sig = (result.signature || result.txSig || result.txid || "").toString();
-      console.log("\n[submit:delegated deposit] tx signature:", sig);
-      expect(sig.length).toBeGreaterThan(20);
-    },
-    120_000
-  );
+    expect(result).toBeTruthy();
+    const sig = (
+      result.signature ||
+      result.txSig ||
+      result.txid ||
+      ""
+    ).toString();
+    console.log("\n[submit:delegated deposit] tx signature:", sig);
+    expect(sig.length).toBeGreaterThan(20);
+  }, 120_000);
 });
