@@ -16,9 +16,9 @@ Sync with other projects
    npm run migrate : Create tables and views by using src/db/migrations/001_init.sql
    npm run init-tree : Initialize all tables
 7. npm run dev
-8. npm run test:e2e:depositata
-9. npm run test:e2e:transferata
-10. npm run test:e2e:withdrawata
+8. DEPOSIT_INDEX=1 npm run test:e2e:depositata
+9. TRANSFER_INDEX=1 npm run test:e2e:transferata
+10. WITHDRAW_INDEX=1 npm run test:e2e:withdrawata
 11. check db
     SELECT k, LENGTH(v) AS len, HEX(v) AS hex FROM merkle_meta WHERE tree_id = 1 AND k = 'roots_next_slot';
     SELECT k, LENGTH(v) AS len, HEX(v) AS hex FROM merkle_meta WHERE tree_id = 1 AND k = 'root';
