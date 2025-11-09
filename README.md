@@ -209,3 +209,4 @@ X-CipherPay-Signature: HMAC_SHA256(METHOD\nPATH\nTIMESTAMP\nSHA256(body))
 - Place Groth16 verification keys in `src/zk/circuits/*.json`.
 - Configure Merkle tree depth via `.env` → `CP_TREE_DEPTH` (e.g. 16 or 32).
 - `tree_id` reserved for multi-tree support in future versions.
+
